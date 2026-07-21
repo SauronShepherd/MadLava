@@ -9,7 +9,7 @@
   <description>Targeted JVM and Spark diagnostics agent</description>
 
   <properties>
-    <revision>0.1.0-beta.2</revision>
+    <revision>0.1.0-rc.2</revision>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>11</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
