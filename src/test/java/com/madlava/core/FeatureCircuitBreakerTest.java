@@ -1,0 +1,3 @@
+package com.madlava.core;
+import static org.junit.jupiter.api.Assertions.*;import java.time.*;import org.junit.jupiter.api.Test;
+class FeatureCircuitBreakerTest { @Test void opensAndRecoversAfterCooldown(){MutableClock clock=new MutableClock();FeatureCircuitBreaker breaker=new FeatureCircuitBreaker(2,100,clock);breaker.failure();assertTrue(breaker.allow());breaker.failure();assertFalse(breaker.allow());clock.millis=101;assertTrue(breaker.allow());assertEquals(0,breaker.failures());}static final class MutableClock extends Clock{long millis;public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId zone){return this;}public Instant instant(){return Instant.ofEpochMilli(millis);}} }

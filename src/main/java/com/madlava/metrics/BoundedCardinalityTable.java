@@ -1,0 +1,3 @@
+package com.madlava.metrics;
+import java.util.Collections;import java.util.LinkedHashMap;import java.util.Map;
+public final class BoundedCardinalityTable { private final int maximum;private final Map<String,Long> values=new LinkedHashMap<>();private long other;public BoundedCardinalityTable(int maximum){if(maximum<1)throw new IllegalArgumentException("Maximum must be positive");this.maximum=maximum;}public synchronized void add(String key,long value){if(values.containsKey(key))values.put(key,values.get(key)+value);else if(values.size()<maximum)values.put(key,value);else other+=value;}public synchronized Map<String,Long> snapshot(){Map<String,Long> copy=new LinkedHashMap<>(values);if(other!=0)copy.put("other",other);return Collections.unmodifiableMap(copy);} }

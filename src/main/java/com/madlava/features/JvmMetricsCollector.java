@@ -1,0 +1,18 @@
+package com.madlava.features;
+
+import java.lang.management.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+public final class JvmMetricsCollector {
+    public Map<String,Object> collect(){Map<String,Object> features=new LinkedHashMap<>();features.put("heapUsage",memory(ManagementFactory.getMemoryMXBean().getHeapMemoryUsage()));features.put("nonHeapUsage",memory(ManagementFactory.getMemoryMXBean().getNonHeapMemoryUsage()));features.put("bufferPools",buffers());features.put("garbageCollection",gc());features.put("threadStatistics",threads());features.put("threadCpu",threadCpu());features.put("processResources",process());features.put("classLoaderInsights",classLoading());features.put("jvmExecutionEngine",compilation());features.put("selfObservability",Map.of("source","madlava","availability","available","accuracy","exact"));return features;}
+    private static Map<String,Object> memory(MemoryUsage u){return Map.of("usedBytes",nonnegative(u.getUsed()),"committedBytes",nonnegative(u.getCommitted()),"maximumBytes",u.getMax()<0?"unavailable":u.getMax(),"source","MemoryMXBean","accuracy","exact");}
+    private static Map<String,Object> buffers(){long count=0,used=0,capacity=0;for(BufferPoolMXBean b:ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class)){count+=nonnegative(b.getCount());used+=nonnegative(b.getMemoryUsed());capacity+=nonnegative(b.getTotalCapacity());}return Map.of("count",count,"memoryUsedBytes",used,"totalCapacityBytes",capacity,"source","BufferPoolMXBean","accuracy","exact");}
+    private static Map<String,Object> gc(){long count=0,time=0;for(GarbageCollectorMXBean b:ManagementFactory.getGarbageCollectorMXBeans()){count+=nonnegative(b.getCollectionCount());time+=nonnegative(b.getCollectionTime());}return Map.of("collections",count,"collectionTimeMillis",time,"source","GarbageCollectorMXBean","accuracy","exact");}
+    private static Map<String,Object> threads(){ThreadMXBean b=ManagementFactory.getThreadMXBean();return Map.of("live",b.getThreadCount(),"daemon",b.getDaemonThreadCount(),"peak",b.getPeakThreadCount(),"totalStarted",b.getTotalStartedThreadCount(),"source","ThreadMXBean","accuracy","exact");}
+    private static Map<String,Object> threadCpu(){ThreadMXBean b=ManagementFactory.getThreadMXBean();return Map.of("available",b.isThreadCpuTimeSupported(),"enabled",b.isThreadCpuTimeSupported()&&b.isThreadCpuTimeEnabled(),"source","ThreadMXBean","accuracy",b.isThreadCpuTimeSupported()?"exact":"unavailable");}
+    private static Map<String,Object> process(){OperatingSystemMXBean b=ManagementFactory.getOperatingSystemMXBean();return Map.of("availableProcessors",b.getAvailableProcessors(),"systemLoadAverage",b.getSystemLoadAverage(),"source","OperatingSystemMXBean","accuracy","jvm-exposed");}
+    private static Map<String,Object> classLoading(){ClassLoadingMXBean b=ManagementFactory.getClassLoadingMXBean();return Map.of("loaded",b.getLoadedClassCount(),"totalLoaded",b.getTotalLoadedClassCount(),"unloaded",b.getUnloadedClassCount(),"source","ClassLoadingMXBean","accuracy","exact");}
+    private static Map<String,Object> compilation(){CompilationMXBean b=ManagementFactory.getCompilationMXBean();if(b==null)return Map.of("availability","unavailable","reason","CompilationMXBean absent");return Map.of("compiler",b.getName(),"timeMonitoring",b.isCompilationTimeMonitoringSupported(),"totalCompilationTimeMillis",b.isCompilationTimeMonitoringSupported()?b.getTotalCompilationTime():-1,"source","CompilationMXBean","accuracy",b.isCompilationTimeMonitoringSupported()?"exact":"unavailable");}
+    private static long nonnegative(long value){return Math.max(0,value);}
+}

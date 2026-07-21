@@ -1,0 +1,16 @@
+param([string]$Revision='0.1.0-dev.2',[switch]$CommittedHead)
+$ErrorActionPreference='Stop'
+$mvn='C:\Program Files\JetBrains\IntelliJ IDEA 2026.1.4\plugins\maven\lib\maven3\bin\mvn.cmd'
+if(!(Test-Path $mvn)){throw 'Maven unavailable'}
+if(!$env:JAVA_HOME){throw 'JAVA_HOME is required'}
+& $mvn -B -Pgeneric clean verify "-Drevision=$Revision"
+if($LASTEXITCODE){throw 'Maven verification failed'}
+& scripts/inspect-agent-jar.ps1 -Revision $Revision
+& scripts/verify-java11-bytecode.ps1 -Revision $Revision
+& scripts/verify-viewer.ps1
+& scripts/verify-artifacts.ps1 -Revision $Revision
+& scripts/verify-english.ps1
+& scripts/verify-i02-report.ps1 -Revision $Revision
+& scripts/generate-checksums.ps1 -Revision $Revision
+if($CommittedHead -and (git status --short --untracked-files=no)){throw 'Committed HEAD has tracked changes'}
+Write-Output 'I02 CERTIFICATION: PASS'

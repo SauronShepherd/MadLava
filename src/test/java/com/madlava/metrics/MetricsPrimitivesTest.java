@@ -1,0 +1,3 @@
+package com.madlava.metrics;
+import static org.junit.jupiter.api.Assertions.*;import org.junit.jupiter.api.Test;
+class MetricsPrimitivesTest { @Test void counterSupportsIntervalReset(){LongCounter c=new LongCounter();c.increment();c.add(2);assertEquals(3,c.reset());assertEquals(0,c.value());}@Test void minMaxRecordsBounds(){AtomicMinMax m=new AtomicMinMax();assertTrue(m.empty());m.record(9);m.record(2);assertEquals(2,m.minimum());assertEquals(9,m.maximum());}@Test void cardinalityAggregatesOverflow(){BoundedCardinalityTable t=new BoundedCardinalityTable(2);t.add("a",1);t.add("b",2);t.add("c",3);t.add("a",4);assertEquals(5,t.snapshot().get("a"));assertEquals(3,t.snapshot().get("other"));} }

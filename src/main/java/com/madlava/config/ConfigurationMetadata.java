@@ -1,0 +1,19 @@
+package com.madlava.config;
+
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+public final class ConfigurationMetadata {
+    public enum Type { BOOLEAN, INTEGER, NUMBER, STRING }
+    public static final class Entry {
+        private final String path; private final Type type; private final Object defaultValue; private final Double minimum; private final Double maximum; private final boolean secret;
+        public Entry(String path, Type type, Object defaultValue, Double minimum, Double maximum, boolean secret) { this.path=path;this.type=type;this.defaultValue=defaultValue;this.minimum=minimum;this.maximum=maximum;this.secret=secret; }
+        public String path(){return path;} public Type type(){return type;} public Object defaultValue(){return defaultValue;} public Double minimum(){return minimum;} public Double maximum(){return maximum;} public boolean secret(){return secret;}
+    }
+    private final Map<String,Entry> entries;
+    public ConfigurationMetadata(Map<String,Entry> entries){this.entries=Collections.unmodifiableMap(new LinkedHashMap<>(entries));}
+    public Map<String,Entry> entries(){return entries;}
+    public static ConfigurationMetadata baseline(){Map<String,Entry> e=new LinkedHashMap<>(); add(e,"enabled",Type.BOOLEAN,true,null,null);add(e,"configuration.strict",Type.BOOLEAN,true,null,null);add(e,"configuration.reload.enabled",Type.BOOLEAN,false,null,null);add(e,"configuration.reload.intervalSeconds",Type.INTEGER,30,1d,86400d);add(e,"safety.maxFeatureErrors",Type.INTEGER,10,1d,100000d);add(e,"safety.featureSnapshotTimeoutMillis",Type.INTEGER,1000,1d,60000d);add(e,"safety.globalSnapshotTimeoutMillis",Type.INTEGER,5000,1d,300000d);for(String id:new String[]{"heapUsage","nonHeapUsage","bufferPools","garbageCollection","threadStatistics","threadCpu","processResources","classLoaderInsights","jvmExecutionEngine","selfObservability"})add(e,"features."+id+".enabled",Type.BOOLEAN,true,null,null);return new ConfigurationMetadata(e);}
+    private static void add(Map<String,Entry> entries,String path,Type type,Object value,Double min,Double max){entries.put(path,new Entry(path,type,value,min,max,false));}
+}

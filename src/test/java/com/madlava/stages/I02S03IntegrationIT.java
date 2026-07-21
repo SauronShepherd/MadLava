@@ -1,0 +1,1 @@
+package com.madlava.stages;import static org.junit.jupiter.api.Assertions.*;import com.madlava.metrics.*;import org.junit.jupiter.api.Test;public class I02S03IntegrationIT{@Test void boundedAggregationPreservesOverflow(){var t=new BoundedCardinalityTable(1);t.add("kept",2);t.add("overflow",3);assertEquals(3,t.snapshot().get("other"));assertEquals(2,t.snapshot().size());}}
