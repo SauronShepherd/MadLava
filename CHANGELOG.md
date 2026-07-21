@@ -17,3 +17,6 @@
 # 0.1.0-beta.1
 
 - Added disabled-by-default bounded diagnostics, local MBean control, atomic reload candidates, incident retention, and adaptive overhead hysteresis.
+# 0.1.0-beta.2
+
+- Added dependency-free Spark 3.5 runtime capability probing and weak, bounded Classic-driver observation.
