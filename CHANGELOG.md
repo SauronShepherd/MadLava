@@ -7,3 +7,7 @@
 ## 0.1.0-dev.1
 
 - Add the attachable baseline agent, schema-v3 JSONL pipeline, runnable example, offline viewer, packaging, and certification scripts.
+# 0.1.0-alpha.1
+
+- Added verifier-tested constructor and Throwable instrumentation with source-separated, privacy-safe reporting.
+- Added Java 11, 17, and 21 transformed-class compatibility lanes and optional JFR Throwable streaming.

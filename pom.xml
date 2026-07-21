@@ -9,14 +9,21 @@
   <description>Targeted JVM and Spark diagnostics agent</description>
 
   <properties>
-    <revision>0.1.0-dev.2</revision>
+    <revision>0.1.0-alpha.1</revision>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>11</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
+    <asm.version>9.8</asm.version>
     <project.build.outputTimestamp>2026-07-21T00:00:00Z</project.build.outputTimestamp>
   </properties>
 
   <dependencies>
+    <dependency>
+      <groupId>org.ow2.asm</groupId><artifactId>asm</artifactId><version>${asm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.ow2.asm</groupId><artifactId>asm-util</artifactId><version>${asm.version}</version><scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -28,6 +35,16 @@
   <build>
     <finalName>madlava-agent-${revision}</finalName>
     <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration>
+          <shadedArtifactAttached>false</shadedArtifactAttached>
+          <createDependencyReducedPom>false</createDependencyReducedPom>
+          <relocations><relocation><pattern>org.objectweb.asm</pattern><shadedPattern>com.madlava.internal.asm</shadedPattern></relocation></relocations>
+        </configuration></execution></executions>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>

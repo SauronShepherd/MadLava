@@ -20,3 +20,6 @@ The target application prints `MADLAVA_EXAMPLE_OK=49995000`. MadLava prints one 
 ## I01 limitations
 
 I01 provides only the safe reporting vertical slice and `selfObservability` envelope. Configuration discovery, instrumentation, generic JVM collectors, Spark adapters, advanced viewer views, control, dumps, and incident recording arrive in later planned iterations. The report is process-local evidence and does not claim root cause.
+# Constructor and Throwable observation
+
+Iteration 03 observation is opt-in. Add `instrumentationInclude=com.example` to the agent arguments to transform only that package prefix. Add `jfrThrowables=true` to request the optional JFR Throwable source; unsupported JVMs report `UNAVAILABLE`. Reports separate successful outermost construction, Throwable creation, explicit `ATHROW`, propagation, and JFR events. Exception messages are never captured.
