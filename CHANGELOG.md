@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0
+
+- Published the final 0.1 documentation set, including architecture, installation, platform support, testing and certification, viewer usage, limitations, roadmap, and the Codex/GPT-5.6 iteration workflow.
+
 ## 0.1.0-rc.2
 
 - Expanded the offline report viewer with strict schema-v3 ingestion, snapshot navigation, feature filtering, health and diagnostic summaries, responsive accessible presentation, and local summary export.
