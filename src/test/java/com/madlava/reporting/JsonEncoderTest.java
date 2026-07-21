@@ -1,0 +1,3 @@
+package com.madlava.reporting;
+import static org.junit.jupiter.api.Assertions.*; import com.madlava.core.FeatureState; import java.time.Instant; import java.util.Map; import org.junit.jupiter.api.Test;
+class JsonEncoderTest { @Test void emitsSchemaV3Envelope(){String json=JsonEncoder.encode(new Snapshot("0.1.0-dev.1","abc",1,0,Instant.EPOCH,false,Map.of("selfObservability",FeatureState.RUNNING)));assertTrue(json.startsWith("{\"schemaVersion\":3"));assertTrue(json.contains("\"configurationHash\":\"abc\""));assertTrue(json.contains("\"state\":\"RUNNING\""));assertFalse(json.contains("NaN"));} @Test void escapesControlCharacters(){assertEquals("a\\n\\\"b",JsonEncoder.escape("a\n\"b"));}}

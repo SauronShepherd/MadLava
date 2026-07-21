@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.madlava</groupId>
+  <artifactId>madlava-agent</artifactId>
+  <version>${revision}</version>
+  <packaging>jar</packaging>
+  <name>MadLava</name>
+  <description>Targeted JVM and Spark diagnostics agent</description>
+
+  <properties>
+    <revision>0.1.0-dev.1</revision>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>11</maven.compiler.release>
+    <junit.version>5.11.4</junit.version>
+    <project.build.outputTimestamp>2026-07-21T00:00:00Z</project.build.outputTimestamp>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>madlava-agent-${revision}</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration><release>11</release></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration><useModulePath>false</useModulePath></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.5.2</version>
+        <executions><execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution></executions>
+        <configuration><useModulePath>false</useModulePath></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive><manifestEntries>
+            <Premain-Class>com.madlava.agent.MadLavaAgent</Premain-Class>
+            <Agent-Class>com.madlava.agent.MadLavaAgent</Agent-Class>
+            <Can-Redefine-Classes>false</Can-Redefine-Classes>
+            <Can-Retransform-Classes>false</Can-Retransform-Classes>
+            <Implementation-Title>MadLava</Implementation-Title>
+            <Implementation-Version>${revision}</Implementation-Version>
+          </manifestEntries></archive>
+        </configuration>
+        <executions>
+          <execution><id>example-jar</id><phase>package</phase><goals><goal>test-jar</goal></goals>
+            <configuration><classifier>example</classifier><includes><include>example/app/**</include></includes><archive><manifest><mainClass>example.app.ExampleApplication</mainClass></manifest></archive></configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions><execution><id>enforce</id><goals><goal>enforce</goal></goals><configuration><rules><dependencyConvergence/><requireJavaVersion><version>[11,)</version></requireJavaVersion></rules></configuration></execution></executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>3.7.1</version>
+        <executions>
+          <execution><id>viewer</id><phase>package</phase><goals><goal>single</goal></goals><configuration><descriptors><descriptor>src/assembly/viewer.xml</descriptor></descriptors><finalName>madlava-report-viewer-${revision}</finalName><appendAssemblyId>false</appendAssemblyId><attach>false</attach></configuration></execution>
+          <execution><id>project</id><phase>package</phase><goals><goal>single</goal></goals><configuration><descriptors><descriptor>src/assembly/project.xml</descriptor></descriptors><finalName>madlava-${revision}-complete-project</finalName><appendAssemblyId>false</appendAssemblyId><attach>false</attach></configuration></execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile><id>generic</id></profile>
+    <profile><id>spark35</id><properties><spark35.version>3.5.9</spark35.version><scala35.binary.version>2.12</scala35.binary.version></properties></profile>
+    <profile><id>spark42</id><properties><spark42.version>4.2.0</spark42.version><scala42.binary.version>2.13</scala42.binary.version></properties></profile>
+  </profiles>
+</project>

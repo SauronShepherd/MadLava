@@ -1,0 +1,1 @@
+{"enabled":true,"output":{"mode":"JSONL_HISTORY","directory":"./madlava-output","intervalSeconds":1,"queueCapacity":64},"features":{"selfObservability":{"enabled":true}}}

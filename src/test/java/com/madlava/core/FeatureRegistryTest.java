@@ -1,0 +1,3 @@
+package com.madlava.core;
+import static org.junit.jupiter.api.Assertions.*; import org.junit.jupiter.api.Test;
+class FeatureRegistryTest { @Test void snapshotsAreImmutableAndTransitionsVisible(){FeatureRegistry r=new FeatureRegistry();r.register("selfObservability",FeatureState.INITIALIZING);r.transition("selfObservability",FeatureState.RUNNING);assertEquals(FeatureState.RUNNING,r.snapshot().get("selfObservability"));assertThrows(UnsupportedOperationException.class,()->r.snapshot().put("x",FeatureState.RUNNING));} @Test void rejectsDuplicates(){FeatureRegistry r=new FeatureRegistry();r.register("x",FeatureState.RUNNING);assertThrows(IllegalArgumentException.class,()->r.register("x",FeatureState.RUNNING));}}

@@ -1,0 +1,2 @@
+param([string]$Revision='0.1.0-dev.1')
+$ErrorActionPreference='Stop';$jar=(Resolve-Path "target/madlava-agent-$Revision.jar").Path;$javap=Join-Path $env:JAVA_HOME 'bin\javap.exe';$output=(& $javap -verbose -classpath $jar com.madlava.agent.MadLavaAgent) -join "`n";if($LASTEXITCODE){throw 'javap inspection failed'};if($output -notmatch 'major version:\s+55'){throw 'Agent class is not Java 11 bytecode'};Write-Output 'Java class major 55: PASS'
