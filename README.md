@@ -23,3 +23,7 @@ I01 provides only the safe reporting vertical slice and `selfObservability` enve
 # Constructor and Throwable observation
 
 Iteration 03 observation is opt-in. Add `instrumentationInclude=com.example` to the agent arguments to transform only that package prefix. Add `jfrThrowables=true` to request the optional JFR Throwable source; unsupported JVMs report `UNAVAILABLE`. Reports separate successful outermost construction, Throwable creation, explicit `ATHROW`, propagation, and JFR events. Exception messages are never captured.
+
+# Runtime I/O and pool observation
+
+Add `runtimeObservation=true` to enable layered stream/channel/network, serialization, and executor metrics. Byte counts use actual operation outcomes. Wrapper layers remain separate, endpoints are anonymized, payloads and full paths are never retained, nested serialization operations are deduplicated, and Kryo is detected dynamically rather than bundled.
