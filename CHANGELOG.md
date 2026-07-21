@@ -14,3 +14,6 @@
 # 0.1.0-alpha.2
 
 - Added opt-in layered stream/channel/network observation, root Java/Kryo serialization measurement, and weak executor lifecycle metrics.
+# 0.1.0-beta.1
+
+- Added disabled-by-default bounded diagnostics, local MBean control, atomic reload candidates, incident retention, and adaptive overhead hysteresis.

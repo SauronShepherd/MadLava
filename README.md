@@ -27,3 +27,7 @@ Iteration 03 observation is opt-in. Add `instrumentationInclude=com.example` to 
 # Runtime I/O and pool observation
 
 Add `runtimeObservation=true` to enable layered stream/channel/network, serialization, and executor metrics. Byte counts use actual operation outcomes. Wrapper layers remain separate, endpoints are anonymized, payloads and full paths are never retained, nested serialization operations are deduplicated, and Kryo is detected dynamically rather than bundled.
+
+# Expensive diagnostics
+
+Expensive diagnostics remain disabled by default. Add `diagnostics=true` to register the local platform MBean `com.madlava:type=DiagnosticController` and enable bounded source-labelled snapshots. HPROF is never automatic; heap-dump requests remain unavailable unless an explicit provider is configured.
