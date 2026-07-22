@@ -2,6 +2,8 @@ package com.madlava.probes;
 
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /** Optional JFR Throwable source loaded reflectively to preserve the Java 11 baseline. */
@@ -22,9 +24,12 @@ final class JfrThrowableMonitor implements AutoCloseable {
             Consumer<Object> callback=event->{try{Object recordedClass=event.getClass().getMethod("getClass",String.class).invoke(event,"thrownClass");String name=(String)recordedClass.getClass().getMethod("getName").invoke(recordedClass);ProbeBridge.jfrThrow(name);}catch(Throwable ignored){}};
             streamType.getMethod("onEvent",String.class,Consumer.class).invoke(stream,"jdk.JavaExceptionThrow",callback);
             close=streamType.getMethod("close");
+            CountDownLatch ready=new CountDownLatch(1);
+            streamType.getMethod("onFlush",Runnable.class).invoke(stream,(Runnable)ready::countDown);
             Method start=streamType.getMethod("start");Object activeStream=stream;
             Thread worker=new Thread(()->{try{start.invoke(activeStream);}catch(Throwable ignored){}},"madlava-jfr-stream");
-            worker.setDaemon(true);worker.start();state=State.RUNNING;
+            worker.setDaemon(true);worker.start();
+            state=ready.await(5,TimeUnit.SECONDS)?State.RUNNING:State.FAILED;
         }catch(ClassNotFoundException unavailable){state=State.UNAVAILABLE;}
         catch(Throwable failure){state=State.FAILED;}
     }
