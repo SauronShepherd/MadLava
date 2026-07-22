@@ -3,6 +3,7 @@
 ## Maintenance
 
 - Refactored agent bootstrap for readability, corrected final-version metadata, strengthened final JAR inspection, generalized checksum generation, and added portable CI coverage.
+- Marked the optional JFR recording stream daemon so it cannot keep an observed JVM alive, and hardened packaged-process test cleanup and diagnostics.
 
 ## 0.1.0
 

@@ -14,13 +14,28 @@ final class JfrThrowableMonitor implements AutoCloseable {
         try{
             Class<?> streamType=Class.forName("jdk.jfr.consumer.RecordingStream");
             stream=streamType.getConstructor().newInstance();
+            // RecordingStream uses its own worker. It must never keep the observed JVM alive.
+            try { streamType.getMethod("setDaemon", boolean.class).invoke(stream, true); }
+            catch (NoSuchMethodException ignored) { /* Older supported JDK: close remains the shutdown path. */ }
             Object settings=streamType.getMethod("enable",String.class).invoke(stream,"jdk.JavaExceptionThrow");
             settings.getClass().getMethod("withThreshold",Duration.class).invoke(settings,Duration.ZERO);
             Consumer<Object> callback=event->{try{Object recordedClass=event.getClass().getMethod("getClass",String.class).invoke(event,"thrownClass");String name=(String)recordedClass.getClass().getMethod("getName").invoke(recordedClass);ProbeBridge.jfrThrow(name);}catch(Throwable ignored){}};
             streamType.getMethod("onEvent",String.class,Consumer.class).invoke(stream,"jdk.JavaExceptionThrow",callback);
-            close=streamType.getMethod("close");streamType.getMethod("startAsync").invoke(stream);state=State.RUNNING;
+            close=streamType.getMethod("close");
+            Method start=streamType.getMethod("start");Object activeStream=stream;
+            Thread worker=new Thread(()->{try{start.invoke(activeStream);}catch(Throwable ignored){}},"madlava-jfr-stream");
+            worker.setDaemon(true);worker.start();state=State.RUNNING;
         }catch(ClassNotFoundException unavailable){state=State.UNAVAILABLE;}
         catch(Throwable failure){state=State.FAILED;}
     }
-    @Override public void close(){try{if(stream!=null&&close!=null)close.invoke(stream);}catch(Throwable ignored){}finally{if(state==State.RUNNING)state=State.STOPPED;}}
+    @Override public void close(){
+        Object activeStream=stream;Method closeMethod=close;
+        stream=null;close=null;
+        if(activeStream!=null&&closeMethod!=null){
+            Thread closer=new Thread(()->{try{closeMethod.invoke(activeStream);}catch(Throwable ignored){}},"madlava-jfr-close");
+            closer.setDaemon(true);closer.start();
+            try{closer.join(1000);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
+        }
+        if(state==State.RUNNING)state=State.STOPPED;
+    }
 }
