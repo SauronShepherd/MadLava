@@ -1,5 +1,9 @@
 # Changelog
 
+## Maintenance
+
+- Refactored agent bootstrap for readability, corrected final-version metadata, strengthened final JAR inspection, generalized checksum generation, and added portable CI coverage.
+
 ## 0.1.0
 
 - Published the final 0.1 documentation set, including architecture, installation, platform support, testing and certification, viewer usage, limitations, roadmap, and the Codex/GPT-5.6 iteration workflow.
