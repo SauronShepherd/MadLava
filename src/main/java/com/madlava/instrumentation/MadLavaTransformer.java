@@ -3,6 +3,9 @@ package com.madlava.instrumentation;
 import com.madlava.methods.MethodFilter;
 import com.madlava.methods.MethodKey;
 import com.madlava.methods.MethodRegistry;
+import com.madlava.methods.MethodObservationPlan;
+import com.madlava.methods.MethodObservationMode;
+import com.madlava.methods.MethodObservationRule;
 import com.madlava.serialization.SparkSerializationPlan;
 import com.madlava.serialization.SparkSerializationTarget;
 import org.objectweb.asm.ClassReader;
@@ -34,10 +37,11 @@ public final class MadLavaTransformer implements ClassFileTransformer {
     private static final String SERIALIZATION_BRIDGE = "com/madlava/serialization/SparkSerializationBridge";
 
     private final boolean methodProfilingEnabled;
-    private final MethodFilter methodFilter;
+    private volatile MethodFilter methodFilter;
     private final MethodRegistry methodRegistry;
     private final boolean sparkSerializationEnabled;
     private final SparkSerializationPlan serializationPlan;
+    private volatile MethodObservationPlan observationPlan;
 
     public MadLavaTransformer(
             boolean methodProfilingEnabled,
@@ -45,11 +49,17 @@ public final class MadLavaTransformer implements ClassFileTransformer {
             MethodRegistry methodRegistry,
             boolean sparkSerializationEnabled,
             SparkSerializationPlan serializationPlan) {
+        this(methodProfilingEnabled, methodFilter, methodRegistry, sparkSerializationEnabled, serializationPlan, MethodObservationPlan.empty());
+    }
+
+    public MadLavaTransformer(boolean methodProfilingEnabled, MethodFilter methodFilter, MethodRegistry methodRegistry,
+            boolean sparkSerializationEnabled, SparkSerializationPlan serializationPlan, MethodObservationPlan observationPlan) {
         this.methodProfilingEnabled = methodProfilingEnabled;
         this.methodFilter = methodFilter;
         this.methodRegistry = methodRegistry;
         this.sparkSerializationEnabled = sparkSerializationEnabled;
         this.serializationPlan = serializationPlan;
+        this.observationPlan = observationPlan == null ? MethodObservationPlan.empty() : observationPlan;
     }
 
     @Override
@@ -82,8 +92,10 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     continue;
                 }
 
-                boolean generic = methodProfilingEnabled
-                        && methodFilter.matches(owner, method.name, method.desc);
+                boolean generic = methodProfilingEnabled && methodFilter.matches(owner, method.name, method.desc);
+                Optional<MethodObservationRule> observation = observationPlan.find(owner, method.name, method.desc);
+                if (!generic) generic = observation.isPresent();
+                boolean traceArgs = observation.isPresent() && observation.get().mode() == MethodObservationMode.COUNT_BY_ARGS;
                 Optional<SparkSerializationTarget> target = sparkSerializationEnabled
                         ? serializationPlan.find(className, method.name, method.desc)
                         : Optional.empty();
@@ -103,7 +115,7 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     serializationPlan.targetMatched(target.get().id());
                 }
 
-                instrument(method, methodId, generic, target.orElse(null));
+                instrument(method, methodId, generic, traceArgs, target.orElse(null));
                 changed = true;
             }
 
@@ -136,10 +148,14 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                 || (sparkSerializationEnabled && serializationPlan.mayMatchClass(internalName));
     }
 
+    public void updateMethodFilter(MethodFilter filter) { if (filter != null) this.methodFilter = filter; }
+    public void updateObservationPlan(MethodObservationPlan plan) { if (plan != null) this.observationPlan = plan; }
+
     private static void instrument(
             MethodNode method,
             int methodId,
             boolean generic,
+            boolean traceArgs,
             SparkSerializationTarget serializationTarget) {
         List<AbstractInsnNode> originalReturns = new ArrayList<>();
         for (AbstractInsnNode instruction = method.instructions.getFirst();
@@ -156,6 +172,8 @@ public final class MadLavaTransformer implements ClassFileTransformer {
             methodStartedLocal = nextLocal;
             nextLocal += 2;
         }
+        int argumentsLocal = -1;
+        if (traceArgs) { argumentsLocal = nextLocal++; }
         int serializationTokenLocal = -1;
         if (serializationTarget != null) {
             serializationTokenLocal = nextLocal;
@@ -179,6 +197,10 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     "(I)J",
                     false));
             entry.add(new VarInsnNode(Opcodes.LSTORE, methodStartedLocal));
+        }
+        if (traceArgs) {
+            appendArgumentsArray(entry, method.access, method.desc);
+            entry.add(new VarInsnNode(Opcodes.ASTORE, argumentsLocal));
         }
         if (serializationTarget != null) {
             entry.add(new LdcInsnNode(serializationTarget.id()));
@@ -211,6 +233,12 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                         false));
             }
             if (generic) {
+                if (traceArgs) {
+                    exit.add(new LdcInsnNode(methodId));
+                    exit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
+                    exit.add(new VarInsnNode(Opcodes.ALOAD, argumentsLocal));
+                    exit.add(new MethodInsnNode(Opcodes.INVOKESTATIC, METHOD_BRIDGE, "traceArguments", "(IJ[Ljava/lang/Object;)V", false));
+                }
                 exit.add(new LdcInsnNode(methodId));
                 exit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
                 exit.add(new MethodInsnNode(
@@ -238,6 +266,12 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     false));
         }
         if (generic) {
+            if (traceArgs) {
+                exceptionalExit.add(new LdcInsnNode(methodId));
+                exceptionalExit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
+                exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, argumentsLocal));
+                exceptionalExit.add(new MethodInsnNode(Opcodes.INVOKESTATIC, METHOD_BRIDGE, "traceArguments", "(IJ[Ljava/lang/Object;)V", false));
+            }
             exceptionalExit.add(new LdcInsnNode(methodId));
             exceptionalExit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
             exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, throwableLocal));
@@ -256,6 +290,39 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                 protectedEnd,
                 handler,
                 "java/lang/Throwable"));
+    }
+
+    private static void appendArgumentsArray(InsnList instructions, int access, String descriptor) {
+        Type[] arguments = Type.getArgumentTypes(descriptor);
+        instructions.add(new LdcInsnNode(arguments.length));
+        instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"));
+        int local = (access & Opcodes.ACC_STATIC) == 0 ? 1 : 0;
+        for (int index = 0; index < arguments.length; index++) {
+            Type type = arguments[index];
+            instructions.add(new InsnNode(Opcodes.DUP));
+            instructions.add(new LdcInsnNode(index));
+            instructions.add(new VarInsnNode(type.getOpcode(Opcodes.ILOAD), local));
+            box(instructions, type);
+            instructions.add(new InsnNode(Opcodes.AASTORE));
+            local += type.getSize();
+        }
+    }
+
+    private static void box(InsnList instructions, Type type) {
+        if (type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY) return;
+        String owner; String descriptor;
+        switch (type.getSort()) {
+            case Type.BOOLEAN: owner="java/lang/Boolean"; descriptor="(Z)Ljava/lang/Boolean;"; break;
+            case Type.BYTE: owner="java/lang/Byte"; descriptor="(B)Ljava/lang/Byte;"; break;
+            case Type.CHAR: owner="java/lang/Character"; descriptor="(C)Ljava/lang/Character;"; break;
+            case Type.SHORT: owner="java/lang/Short"; descriptor="(S)Ljava/lang/Short;"; break;
+            case Type.INT: owner="java/lang/Integer"; descriptor="(I)Ljava/lang/Integer;"; break;
+            case Type.FLOAT: owner="java/lang/Float"; descriptor="(F)Ljava/lang/Float;"; break;
+            case Type.LONG: owner="java/lang/Long"; descriptor="(J)Ljava/lang/Long;"; break;
+            case Type.DOUBLE: owner="java/lang/Double"; descriptor="(D)Ljava/lang/Double;"; break;
+            default: return;
+        }
+        instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, owner, "valueOf", descriptor, false));
     }
 
     private static void appendPrimaryArgument(

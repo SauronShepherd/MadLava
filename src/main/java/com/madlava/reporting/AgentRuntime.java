@@ -12,6 +12,7 @@ import com.madlava.diagnostics.DiagnosticsRuntime;
 import com.madlava.spark.SparkObservationRegistry;
 import com.madlava.core.RuntimeCapabilities;
 import com.madlava.serialization.SparkRuntimeInfo;
+import com.madlava.config.RuntimeConfigurationManager;
 
 import java.lang.management.ManagementFactory;
 import java.time.Instant;
@@ -28,6 +29,7 @@ public final class AgentRuntime {
     private final SparkSerializationPlan serializationPlan;
     private final long startedEpochMillis;
     private final JvmMetricsCollector jvmMetrics = new JvmMetricsCollector();
+    private final RuntimeConfigurationManager runtimeConfiguration;
 
     public AgentRuntime(
             String version,
@@ -36,12 +38,20 @@ public final class AgentRuntime {
             MethodMetrics methodMetrics,
             SparkSerializationMetrics serializationMetrics,
             SparkSerializationPlan serializationPlan) {
+        this(version, configurationHash, options, methodMetrics, serializationMetrics, serializationPlan, null);
+    }
+
+    public AgentRuntime(
+            String version, String configurationHash, AgentOptions options, MethodMetrics methodMetrics,
+            SparkSerializationMetrics serializationMetrics, SparkSerializationPlan serializationPlan,
+            RuntimeConfigurationManager runtimeConfiguration) {
         this.version = version;
         this.configurationHash = configurationHash;
         this.options = options;
         this.methodMetrics = methodMetrics;
         this.serializationMetrics = serializationMetrics;
         this.serializationPlan = serializationPlan;
+        this.runtimeConfiguration = runtimeConfiguration;
         this.startedEpochMillis = System.currentTimeMillis();
     }
 
@@ -52,6 +62,16 @@ public final class AgentRuntime {
         root.put("reason", reason);
         root.put("agentVersion", version);
         root.put("configurationHash", configurationHash);
+        if (runtimeConfiguration != null) {
+            RuntimeConfigurationManager.ConfigurationState state = runtimeConfiguration.current();
+            root.put("configurationVersion", state.version());
+            root.put("runtimeConfigurationHash", state.hash());
+            root.put("configurationRuntime", Map.of(
+                    "version", state.version(),
+                    "successfulReloads", runtimeConfiguration.successfulReloads(),
+                    "failedReloads", runtimeConfiguration.failedReloads(),
+                    "lastReloadEpochMillis", runtimeConfiguration.lastReloadEpochMillis()));
+        }
         Map<String, Object> provenance = new LinkedHashMap<>();
         provenance.put("source", options.configurationSource());
         provenance.put("sourcePath", options.configurationSourcePath());

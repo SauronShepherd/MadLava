@@ -52,6 +52,12 @@ public final class MethodProbeBridge {
         complete(methodId, startedNanos, true);
     }
 
+    public static void traceArguments(int methodId, long durationNanos, Object[] arguments) {
+        MethodMetrics metrics = METRICS.get();
+        if (metrics == null || methodId == MethodRegistry.REJECTED_ID) return;
+        try { metrics.traceArguments(methodId, durationNanos, arguments); } catch (Throwable ignored) { }
+    }
+
     private static void complete(int methodId, long startedNanos, boolean exceptional) {
         MethodMetrics metrics = METRICS.get();
         if (metrics == null || methodId == MethodRegistry.REJECTED_ID || startedNanos == 0L) {

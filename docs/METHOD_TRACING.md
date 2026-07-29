@@ -1,5 +1,24 @@
 # Generic method tracing
 
+## Observation modes and argument safety
+
+Plain `Class.method` rules are cheap `COUNT` profiling. The explicit
+`Class.method(*)` suffix represents aggregate `COUNT_BY_ARGS` and is not a
+method-name wildcard. It groups bounded rendered argument tuples and does not
+emit one event per invocation. JVM descriptors can be appended with `#` to
+distinguish overloads.
+
+Argument rendering is opt-in and bounded. `SAFE` never invokes application
+`toString()` for arbitrary objects; `TO_STRING` is explicit and catches failures.
+Sampling is independent from aggregate counting, so a zero trace sample rate
+still preserves exact invocation metrics. Redaction supports zero-based argument
+indexes and compiled value patterns.
+
+The parser, renderer, sampler, redactor, atomic configuration manager, file
+watcher, live writer switching, streamed method-call records, and selective
+`COUNT_BY_ARGS` aggregation are implemented. Equal rendered argument tuples
+share one bounded aggregate counter rather than producing one event per call.
+
 ## Contract
 
 For every selected non-constructor, non-native, non-abstract method, MadLava records:

@@ -14,20 +14,33 @@ public final class SparkRuntimeInfo {
     }
 
     public static Map<String, Object> detect() {
+        return detect(Thread.currentThread().getContextClassLoader());
+    }
+
+    public static Map<String, Object> detect(ClassLoader loader) {
         Map<String, Object> cached = CACHE.get();
         if (cached != null) {
             return cached;
         }
         Map<String, Object> detected = new LinkedHashMap<>();
-        String sparkVersion = invokeScalaObjectString("org.apache.spark.package$", "SPARK_VERSION");
-        String scalaVersion = invokeScalaObjectString("scala.util.Properties$", "versionNumberString");
+        String sparkVersion = invokeScalaObjectString("org.apache.spark.package$", "SPARK_VERSION", loader);
+        String scalaVersion = invokeScalaObjectString("scala.util.Properties$", "versionNumberString", loader);
         detected.put("sparkVersion", sparkVersion);
         detected.put("scalaVersion", scalaVersion);
+        detected.put("scalaBinaryVersion", scalaBinary(scalaVersion));
         detected.put("javaVersion", System.getProperty("java.version", "unknown"));
         detected.put("supported", supports(sparkVersion, scalaVersion));
         Map<String, Object> immutable = Map.copyOf(detected);
-        CACHE.compareAndSet(null, immutable);
-        return CACHE.get();
+        if (isResolved(immutable)) {
+            CACHE.compareAndSet(null, immutable);
+            return CACHE.get();
+        }
+        return immutable;
+    }
+
+    private static boolean isResolved(Map<String, Object> result) {
+        return !"unknown".equals(result.get("sparkVersion"))
+                && !"unknown".equals(result.get("scalaVersion"));
     }
 
     private static boolean supports(String sparkVersion, String scalaVersion) {
@@ -35,9 +48,8 @@ public final class SparkRuntimeInfo {
             return false;
         }
         String binary = scalaBinary(scalaVersion);
-        return ("3.5.9".equals(sparkVersion) && ("2.12".equals(binary) || "2.13".equals(binary)))
-                || (("4.0.4".equals(sparkVersion) || "4.1.3".equals(sparkVersion) || "4.2.0".equals(sparkVersion))
-                && "2.13".equals(binary));
+        return (sparkVersion.startsWith("3.5.") && ("2.12".equals(binary) || "2.13".equals(binary)))
+                || (sparkVersion.startsWith("4.") && "2.13".equals(binary));
     }
 
     private static String scalaBinary(String version) {
@@ -46,9 +58,9 @@ public final class SparkRuntimeInfo {
         return second < 0 ? version : version.substring(0, second);
     }
 
-    private static String invokeScalaObjectString(String className, String methodName) {
+    private static String invokeScalaObjectString(String className, String methodName, ClassLoader loader) {
         try {
-            ClassLoader context = Thread.currentThread().getContextClassLoader();
+            ClassLoader context = loader == null ? Thread.currentThread().getContextClassLoader() : loader;
             Class<?> type = Class.forName(className, false,
                     context == null ? SparkRuntimeInfo.class.getClassLoader() : context);
             Field moduleField = type.getField("MODULE$");

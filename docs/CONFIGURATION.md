@@ -2,6 +2,49 @@
 
 MadLava `0.1.0` accepts either compact `-javaagent` options or a JSON configuration file. The complete starting point is [madlava.json.example](../madlava.json.example).
 
+## Runtime configuration and hot reload
+
+`RuntimeConfigurationManager` keeps an immutable effective configuration in an
+`AtomicReference`. Accepted updates receive a monotonically increasing version
+and SHA-256 hash; rejected updates leave the previous configuration active.
+Set `configuration.hotReload.enabled` to `true` in a file-backed configuration
+to start the agent's daemon `ConfigurationWatcher`. It uses `WatchService` with
+debounce support for normal and replace-style editor saves. Invalid or
+temporarily missing files are ignored safely, and the watcher is closed by the
+agent shutdown hook.
+
+The configuration core, method rule model, safe renderer, sampling, and
+redaction primitives are available. Reporter output switching, streamed trace
+records, and JVM retransformation orchestration remain the next integration
+step; the existing reporter remains startup-configured for now.
+
+## Method observation rules
+
+Existing `Class.method` rules remain aggregate `COUNT` rules and do not render
+arguments. The explicit `Class.method(*)` suffix selects aggregate
+`COUNT_BY_ARGS` semantics in the structured method-rule model. It is not a
+wildcard for arbitrary method names and does not emit one event per invocation.
+JVM descriptors may be supplied with `#`, for example:
+
+```text
+com.example.Parser.parse#(Ljava/lang/String;)V
+com.example.Parser.parse(*)
+```
+
+The default `SAFE` renderer does not call `toString()` on arbitrary application
+objects; it uses bounded primitive/collection rendering and type/identity
+fallbacks. `TO_STRING` is explicit opt-in and failure-protected. Sampling rates
+range from `0` to `1`, while redaction supports zero-based argument indexes and
+compiled regular-expression patterns.
+
+Set `features.methodTracing.enabled` to `true` to emit non-argument TRACE
+events for selected methods. It is disabled by default; enabling ordinary
+method profiling does not enable tracing.
+
+Use `Class.method(*)` for aggregate `COUNT_BY_ARGS`. It preserves exact method
+totals and groups equal rendered argument tuples with bounded cardinality. This
+is distinct from per-invocation `TRACE_ARGS` events.
+
 ## JSON configuration
 
 Copy the example and adjust the output directory and method filters:

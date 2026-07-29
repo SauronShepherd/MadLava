@@ -10,8 +10,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.security.MessageDigest;
 
 public final class JsonlWriter implements AutoCloseable {
-    private static final long MAX_SEGMENT_BYTES = 1_048_576L;
-    private final BoundedSnapshotQueue queue; private final AtomicBoolean running=new AtomicBoolean(); private final Path path; private Thread thread;
+    private static final long MAX_SEGMENT_BYTES = 100L * 1024L * 1024L;
+    private final BoundedSnapshotQueue queue; private final AtomicBoolean running=new AtomicBoolean(); private volatile Path path; private Thread thread;
     private volatile Path lastSegment;
     public JsonlWriter(BoundedSnapshotQueue queue,Path path){this.queue=queue;this.path=path;}
     public void start() throws IOException {Files.createDirectories(path.toAbsolutePath().normalize().getParent());running.set(true);thread=new Thread(this::run,"madlava-writer");thread.setDaemon(true);thread.start();}
@@ -45,6 +45,15 @@ public final class JsonlWriter implements AutoCloseable {
         running.set(false);
         if(thread!=null){try{thread.join(3000);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
         finalizeManifest();
+    }
+
+    public synchronized void rotate(Path nextPath) throws IOException {
+        if (nextPath == null) throw new IllegalArgumentException("nextPath");
+        running.set(false);
+        if (thread != null) { thread.interrupt(); try { thread.join(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }
+        finalizeManifest();
+        path = nextPath;
+        start();
     }
 
     private void finalizeManifest() {

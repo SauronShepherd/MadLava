@@ -67,6 +67,10 @@ public final class MethodFilter {
         for (String part : raw.split(";")) {
             String trimmed = part.trim();
             if (!trimmed.isEmpty()) {
+                // (*) is an observation-mode suffix, not part of the method identity.
+                if (trimmed.endsWith("(*)")) {
+                    trimmed = trimmed.substring(0, trimmed.length() - 3);
+                }
                 patterns.add(MethodPattern.compile(trimmed));
             }
         }

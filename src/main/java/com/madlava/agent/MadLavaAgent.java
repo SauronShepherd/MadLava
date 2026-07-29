@@ -11,6 +11,12 @@ import com.madlava.reporting.JsonlReporter;
 import com.madlava.serialization.SparkSerializationBridge;
 import com.madlava.serialization.SparkSerializationMetrics;
 import com.madlava.serialization.SparkSerializationPlan;
+import com.madlava.config.ConfigurationMetadata;
+import com.madlava.config.ConfigurationResolver;
+import com.madlava.config.ConfigurationWatcher;
+import com.madlava.config.RuntimeConfigurationManager;
+import com.madlava.methods.MethodObservationPlan;
+import com.madlava.api.MadLavaRuntimeRegistry;
 
 import java.lang.instrument.Instrumentation;
 import java.nio.charset.StandardCharsets;
@@ -48,10 +54,18 @@ public final class MadLavaAgent {
         }
         MadLavaTransformer transformer = null;
         JsonlReporter reporter = null;
+        ConfigurationWatcher configurationWatcher = null;
+        RuntimeConfigurationManager runtimeConfiguration = null;
         boolean methodBridgeConfigured = false;
         boolean serializationBridgeConfigured = false;
         try {
             AgentOptions options = AgentOptions.parse(rawArguments);
+            runtimeConfiguration = new RuntimeConfigurationManager(
+                    new ConfigurationResolver(ConfigurationMetadata.baseline()),
+                    java.util.Collections.emptyMap(), options.configurationSourcePath());
+            if (!options.configurationSourcePath().isBlank()) {
+                runtimeConfiguration.reloadJson(java.nio.file.Paths.get(options.configurationSourcePath()), java.util.Collections.emptyMap());
+            }
             String version = MadLavaAgent.class.getPackage().getImplementationVersion();
             if (version == null || version.isBlank()) {
                 version = FALLBACK_VERSION;
@@ -85,7 +99,7 @@ public final class MadLavaAgent {
                 serializationBridgeConfigured = true;
             }
 
-            if (options.methodProfilingEnabled() || options.sparkSerializationEnabled()) {
+            if (options.methodProfilingEnabled() || options.methodTracingEnabled() || options.sparkSerializationEnabled()) {
                 transformer = new MadLavaTransformer(
                         options.methodProfilingEnabled(),
                         methodFilter,
@@ -93,7 +107,8 @@ public final class MadLavaAgent {
                         options.sparkSerializationEnabled(),
                         serializationPlan == null
                                 ? new SparkSerializationPlan(options.sparkSerializationProfile())
-                                : serializationPlan);
+                                : serializationPlan,
+                        MethodObservationPlan.compile(java.util.Arrays.asList(options.methodIncludes().split(";"))));
                 instrumentation.addTransformer(transformer, true);
             }
 
@@ -103,16 +118,63 @@ public final class MadLavaAgent {
                     options,
                     methodMetrics,
                     serializationMetrics,
-                    serializationPlan);
+                    serializationPlan,
+                    runtimeConfiguration);
+            if (!MadLavaRuntimeRegistry.register(runtime)) {
+                throw new IllegalStateException("MadLava runtime already registered");
+            }
+            MadLavaRuntimeRegistry.registerConfiguration(runtimeConfiguration);
             reporter = new JsonlReporter(runtime, options.outputDirectory());
+            reporter.bindConfiguration(runtimeConfiguration);
             reporter.start(options.snapshotIntervalSeconds(), options.shutdownSnapshotOnly());
+            if (options.methodTracingEnabled() && methodMetrics != null) {
+                methodMetrics.enableTracing(runtimeConfiguration.current().version(), options.methodTracingSampleRate(), reporter::submitTraceEvent);
+            }
+            if (transformer != null) {
+                MadLavaTransformer liveTransformer = transformer;
+                JsonlReporter tracingReporter = reporter;
+                runtimeConfiguration.addListener((previous, current) -> {
+                    Object tracing = current.values().get("features.methodTracing.enabled");
+                    if (methodMetrics != null && tracing != null) {
+                        if (Boolean.parseBoolean(String.valueOf(tracing))) {
+                            Object sampleRate = current.values().get("features.methodTracing.sampleRate");
+                            double rate = sampleRate instanceof Number ? ((Number) sampleRate).doubleValue() : 1.0;
+                            methodMetrics.enableTracing(current.version(), rate, tracingReporter::submitTraceEvent);
+                        } else {
+                            methodMetrics.disableTracing();
+                        }
+                    }
+                    Object includes = current.values().get("filters.methods.includes");
+                    Object excludes = current.values().get("filters.methods.excludes");
+                    if (includes != null || excludes != null) {
+                        liveTransformer.updateMethodFilter(MethodFilter.parse(String.valueOf(includes), String.valueOf(excludes)));
+                        liveTransformer.updateObservationPlan(MethodObservationPlan.compile(
+                                java.util.Arrays.asList(String.valueOf(includes).split(";"))));
+                        retransformAlreadyLoaded(instrumentation, liveTransformer);
+                    }
+                });
+            }
+
+            if (options.hotReloadEnabled() && !options.configurationSourcePath().isBlank()) {
+                configurationWatcher = new ConfigurationWatcher(
+                        java.nio.file.Paths.get(options.configurationSourcePath()), runtimeConfiguration);
+                configurationWatcher.start();
+            }
 
             MadLavaTransformer activeTransformer = transformer;
             if (retransformLoadedClasses && activeTransformer != null) {
                 retransformAlreadyLoaded(instrumentation, activeTransformer);
             }
 
-            Runtime.getRuntime().addShutdownHook(new Thread(reporter::close, "madlava-shutdown"));
+            ConfigurationWatcher activeWatcher = configurationWatcher;
+            JsonlReporter activeReporter = reporter;
+            RuntimeConfigurationManager activeConfiguration = runtimeConfiguration;
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (activeWatcher != null) activeWatcher.close();
+                activeReporter.close();
+                MadLavaRuntimeRegistry.clear(runtime);
+                MadLavaRuntimeRegistry.clearConfiguration(activeConfiguration);
+            }, "madlava-shutdown"));
             if (options.diagnosticsToStderr()) {
                 System.err.println(
                         "MadLava " + version

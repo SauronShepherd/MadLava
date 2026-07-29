@@ -1,5 +1,9 @@
 package com.madlava.reporting;
 
+import com.madlava.config.ConfigurationChangeEvent;
+import com.madlava.config.RuntimeConfigurationManager;
+import com.madlava.tracing.TraceDispatcher;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -19,13 +23,17 @@ import java.lang.management.ManagementFactory;
 /** Single-threaded JSONL writer; application threads never perform file I/O. */
 public final class JsonlReporter implements Closeable {
     private final AgentRuntime runtime;
-    private final Path reportPath;
+    private volatile Path reportPath;
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final BoundedSnapshotQueue queue;
     private final JsonlWriter writer;
     private final FileChannel ownershipChannel;
     private final FileLock ownershipLock;
+    private RuntimeConfigurationManager.Listener configurationListener;
+    private RuntimeConfigurationManager.RejectionListener rejectionListener;
+    private RuntimeConfigurationManager configurationManager;
+    private final TraceDispatcher traceDispatcher;
 
     public JsonlReporter(AgentRuntime runtime, Path outputDirectory) throws IOException {
         this.runtime = runtime;
@@ -35,6 +43,7 @@ public final class JsonlReporter implements Closeable {
         this.reportPath = runDirectory.resolve("madlava.jsonl");
         this.queue = new BoundedSnapshotQueue(256);
         this.writer = new JsonlWriter(queue, reportPath);
+        this.traceDispatcher = new TraceDispatcher(1024, event -> queue.submit(Json.encode(event)));
         Path manifest = outputDirectory.resolve("madlava-run-" + pid + ".json");
         String manifestText = "{\"pid\":\"" + escape(pid) + "\",\"report\":\""
                 + escape(this.reportPath.toAbsolutePath().normalize().toString()) + "\"}\n";
@@ -68,6 +77,41 @@ public final class JsonlReporter implements Closeable {
         return reportPath;
     }
 
+    public boolean submitTraceEvent(java.util.Map<String, Object> event) { return traceDispatcher.submit(event); }
+    public long traceEventsProduced() { return traceDispatcher.produced(); }
+    public long traceEventsDropped() { return traceDispatcher.dropped(); }
+
+    public synchronized void bindConfiguration(RuntimeConfigurationManager manager) {
+        if (manager == null || configurationListener != null) return;
+        configurationManager = manager;
+        configurationListener = (previous, current) -> {
+            try {
+                Object oldOutput = previous.values().get("reporting.output");
+                Object newOutput = current.values().get("reporting.output");
+                if (!java.util.Objects.equals(oldOutput, newOutput) && newOutput != null) rotateOutput(java.nio.file.Paths.get(String.valueOf(newOutput)));
+                queue.submit(Json.encode(ConfigurationChangeEvent.accepted(previous, current)));
+            }
+            catch (Throwable ignored) { }
+        };
+        rejectionListener = (current, reason) -> {
+            try { queue.submit(Json.encode(ConfigurationChangeEvent.rejected(current, reason))); }
+            catch (Throwable ignored) { }
+        };
+        manager.addListener(configurationListener);
+        manager.addRejectionListener(rejectionListener);
+    }
+
+    private synchronized void rotateOutput(Path output) throws IOException {
+        Path root = output.toAbsolutePath().normalize();
+        Files.createDirectories(root);
+        String pid = ManagementFactory.getRuntimeMXBean().getName().split("@", 2)[0];
+        Path run = root.resolve("run-" + pid + "-" + Long.toUnsignedString(System.nanoTime()));
+        Files.createDirectories(run);
+        Path next = run.resolve("madlava.jsonl");
+        writer.rotate(next);
+        reportPath = next;
+    }
+
     public void start(int intervalSeconds, boolean shutdownOnly) {
         try {
             writer.start();
@@ -90,6 +134,11 @@ public final class JsonlReporter implements Closeable {
             return;
         }
         scheduler.shutdownNow();
+        traceDispatcher.close();
+        if (configurationManager != null && configurationListener != null) {
+            configurationManager.removeListener(configurationListener);
+            configurationManager.removeRejectionListener(rejectionListener);
+        }
         writeSafely("shutdown");
         writer.close();
         try {

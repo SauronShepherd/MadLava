@@ -107,6 +107,9 @@ public final class AgentOptions {
         return booleanValue("methodProfiling", false);
     }
 
+    public boolean methodTracingEnabled() { return booleanValue("methodTracing", false); }
+    public double methodTracingSampleRate() { try { double value=Double.parseDouble(value("methodTracingSampleRate", "1")); return value>=0&&value<=1?value:1; } catch (NumberFormatException ignored) { return 1; } }
+
     public String methodIncludes() {
         return value("methodInclude", "");
     }
@@ -143,6 +146,8 @@ public final class AgentOptions {
         return booleanValue("shutdownSnapshotOnly", false);
     }
 
+    public boolean hotReloadEnabled() { return booleanValue("hotReload", false); }
+
     public boolean diagnosticsToStderr() {
         return booleanValue("diagnosticsToStderr", true);
     }
@@ -167,6 +172,7 @@ public final class AgentOptions {
         result.put("shutdownSnapshotOnly", Boolean.toString(shutdownSnapshotOnly()));
         result.put("diagnosticsToStderr", Boolean.toString(diagnosticsToStderr()));
         result.put("methodProfiling", Boolean.toString(methodProfilingEnabled()));
+        result.put("methodTracing", Boolean.toString(methodTracingEnabled()));
         result.put("methodInclude", methodIncludes());
         result.put("methodExclude", methodExcludes());
         result.put("methodMaxEntries", Integer.toString(methodMaxEntries()));
@@ -190,8 +196,11 @@ public final class AgentOptions {
             put(values, "output", path(root, "output", "directory"));
             putPositiveInt(values, "snapshotIntervalSeconds", path(root, "reporting", "snapshotIntervalSeconds"));
             putBoolean(values, "shutdownSnapshotOnly", path(root, "reporting", "shutdownSnapshotOnly"));
+            putBoolean(values, "hotReload", path(root, "configuration", "hotReload", "enabled"));
 
             putBoolean(values, "methodProfiling", path(root, "features", "methodProfiling", "enabled"));
+            putBoolean(values, "methodTracing", path(root, "features", "methodTracing", "enabled"));
+            put(values, "methodTracingSampleRate", path(root, "features", "methodTracing", "sampleRate"));
             putPositiveInt(values, "methodMaxEntries", path(root, "features", "methodProfiling", "maxEntries"));
             put(values, "methodInclude", joined(path(root, "filters", "methods", "includes")));
             put(values, "methodExclude", joined(path(root, "filters", "methods", "excludes")));

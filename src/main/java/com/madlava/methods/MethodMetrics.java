@@ -8,12 +8,26 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Consumer;
+import com.madlava.tracing.TraceEvent;
+import com.madlava.tracing.TraceSampler;
+import com.madlava.tracing.ArgumentCapture;
+import com.madlava.tracing.SafeArgumentRenderer;
+import com.madlava.tracing.ArgumentRedactor;
 
 /** Lock-free inclusive method-boundary aggregation. */
 public final class MethodMetrics {
     private final MethodRegistry registry;
     private final ConcurrentHashMap<Integer, Counters> counters = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, ConcurrentHashMap<ArgumentKey, LongAdder>> argumentGroups = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, LongAdder> droppedArgumentGroups = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, LongAdder> overflowArgumentInvocations = new ConcurrentHashMap<>();
+    private static final int MAX_ARGUMENT_GROUPS_PER_METHOD = 256;
     private final LongAdder suppressedReentrantCallbacks = new LongAdder();
+    private volatile Consumer<Map<String,Object>> traceSink;
+    private volatile long traceConfigurationVersion;
+    private volatile TraceSampler traceSampler = new TraceSampler(1.0);
+    private volatile ArgumentCapture argumentCapture = new ArgumentCapture(new SafeArgumentRenderer(), new ArgumentRedactor(null, null), 16);
 
     public MethodMetrics(MethodRegistry registry) {
         this.registry = registry;
@@ -33,6 +47,7 @@ public final class MethodMetrics {
         Counters values = counters.computeIfAbsent(methodId, ignored -> new Counters());
         values.normalCompletions.increment();
         values.recordDuration(durationNanos);
+        emitTrace(methodId, durationNanos);
     }
 
     public void exceptionalCompletion(int methodId, long durationNanos) {
@@ -42,6 +57,36 @@ public final class MethodMetrics {
         Counters values = counters.computeIfAbsent(methodId, ignored -> new Counters());
         values.exceptionalCompletions.increment();
         values.recordDuration(durationNanos);
+        emitTrace(methodId, durationNanos);
+    }
+
+    public void enableTracing(long configurationVersion, Consumer<Map<String,Object>> sink) { traceConfigurationVersion=configurationVersion; traceSink=sink; }
+    public void enableTracing(long configurationVersion, double sampleRate, Consumer<Map<String,Object>> sink) { traceConfigurationVersion=configurationVersion; traceSampler=new TraceSampler(sampleRate); traceSink=sink; }
+    public void disableTracing() { traceSink=null; }
+    public void configureArgumentCapture(ArgumentCapture capture) { if(capture!=null) argumentCapture=capture; }
+    public void traceArguments(int methodId, long durationNanos, Object[] arguments) {
+        MethodKey key=registry.key(methodId);
+        if(key==null)return;
+        try {
+            List<String> rendered = argumentCapture.capture(arguments);
+            ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.computeIfAbsent(methodId, ignored -> new ConcurrentHashMap<>());
+            ArgumentKey keyValue = new ArgumentKey(rendered);
+            LongAdder group = groups.get(keyValue);
+            if(group == null && groups.size() >= MAX_ARGUMENT_GROUPS_PER_METHOD) {
+                droppedArgumentGroups.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
+                overflowArgumentInvocations.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
+                return;
+            }
+            groups.computeIfAbsent(keyValue, ignored -> new LongAdder()).increment();
+        }
+        catch(Throwable ignored) { }
+    }
+
+    private void emitTrace(int methodId, long durationNanos) {
+        Consumer<Map<String,Object>> sink=traceSink; MethodKey key=registry.key(methodId);
+        if(sink==null||key==null||!traceSampler.sample())return;
+        try { sink.accept(TraceEvent.methodCall(traceConfigurationVersion,key.owner(),key.name(),key.descriptor(),durationNanos,null)); }
+        catch(Throwable ignored) { }
     }
 
     public void suppressedReentrantCallback() {
@@ -68,6 +113,15 @@ public final class MethodMetrics {
             item.put("maximumDurationNanos", completions == 0 ? 0 : values.maximumDurationNanos.get());
             item.put("averageDurationNanos", completions == 0 ? 0 : total / completions);
             item.put("timingSemantics", "INCLUSIVE_ELAPSED_SYSTEM_NANO_TIME");
+            ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.get(entry.getKey());
+            if (groups != null && !groups.isEmpty()) {
+                List<Map<String,Object>> argumentReports = new ArrayList<>();
+                groups.forEach((arguments, count) -> { Map<String,Object> group = new LinkedHashMap<>(); group.put("arguments", arguments.arguments()); group.put("invocations", count.sum()); argumentReports.add(group); });
+                argumentReports.sort(Comparator.comparingLong((Map<String,Object> group) -> ((Number) group.get("invocations")).longValue()).reversed().thenComparing(Object::toString));
+                item.put("argumentGroups", argumentReports);
+                item.put("droppedArgumentGroups", droppedArgumentGroups.getOrDefault(entry.getKey(), new LongAdder()).sum());
+                item.put("overflowArgumentInvocations", overflowArgumentInvocations.getOrDefault(entry.getKey(), new LongAdder()).sum());
+            }
             methods.add(item);
         }
         methods.sort(Comparator
