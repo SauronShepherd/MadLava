@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://madlava.dev/schema/madlava-report-v1.schema.json",
+  "title": "MadLava report v1",
+  "type": "object",
+  "required": ["schemaVersion", "timestamp", "agentVersion", "configurationHash", "pid", "features", "configuration"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "agentVersion": {"type": "string", "minLength": 1},
+    "configurationHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pid": {"type": "string", "minLength": 1},
+    "uptimeMillis": {"type": "integer", "minimum": 0},
+    "reason": {"type": "string"},
+    "configuration": {
+      "type": "object",
+      "required": ["source", "hashAlgorithm"],
+      "properties": {
+        "source": {"type": "string"},
+        "sourcePath": {"type": "string"},
+        "hashAlgorithm": {"const": "SHA-256"}
+      },
+      "additionalProperties": false
+    },
+    "features": {"type": "object"},
+    "capabilities": {"type": "object"},
+    "sparkRuntime": {"type": "object"},
+    "cumulative": {"type": "object"},
+    "integrity": {"type": "object"}
+  },
+  "additionalProperties": false
+}

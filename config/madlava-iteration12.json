@@ -1,0 +1,42 @@
+{
+  "output": {
+    "directory": "madlava-output"
+  },
+  "reporting": {
+    "snapshotIntervalSeconds": 1,
+    "shutdownSnapshotOnly": false
+  },
+  "features": {
+    "methodProfiling": {
+      "enabled": true,
+      "maxEntries": 2048
+    },
+    "sparkSerialization": {
+      "enabled": true,
+      "profile": "ALL",
+      "rootClasses": true,
+      "maxGroups": 2048
+    }
+  },
+  "filters": {
+    "methods": {
+      "includes": [
+        "org.apache.spark.serializer.JavaSerializer.newInstance",
+        "org.apache.spark.serializer.JavaSerializerInstance.serialize",
+        "org.apache.spark.serializer.JavaSerializerInstance.deserialize",
+        "org.apache.spark.serializer.JavaSerializerInstance.serializeStream",
+        "org.apache.spark.serializer.JavaSerializerInstance.deserializeStream",
+        "org.apache.spark.serializer.JavaSerializationStream.writeObject",
+        "org.apache.spark.serializer.JavaDeserializationStream.readObject",
+        "org.apache.spark.serializer.KryoSerializer.newInstance",
+        "org.apache.spark.serializer.KryoSerializerInstance.serialize",
+        "org.apache.spark.serializer.KryoSerializerInstance.deserialize",
+        "org.apache.spark.serializer.KryoSerializerInstance.serializeStream",
+        "org.apache.spark.serializer.KryoSerializerInstance.deserializeStream",
+        "org.apache.spark.serializer.KryoSerializationStream.writeObject",
+        "org.apache.spark.serializer.KryoDeserializationStream.readObject"
+      ],
+      "excludes": []
+    }
+  }
+}

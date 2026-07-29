@@ -1,9 +1,71 @@
-# Testing and release gates
+# Testing and certification
 
-`mvn -B -Pgeneric clean verify -Drevision=0.1.0` runs unit tests, integration tests, the packaged child-JVM scenario, shading, and archive assembly. Tests cover configuration, registry state, bounded metrics, encoding and queue behavior, JVM collection, instrumentation, runtime I/O and serialization, diagnostics, Spark-safe fallback, and packaged startup/shutdown.
+Iteration-12 uses no notebooks. All acceptance evidence is produced by deterministic unit tests and fresh forked JVMs.
 
-`scripts/certify-i08.ps1` is the final local release entry point. It runs the complete generic build on Java 11, targeted compatibility tests on Java 17 and 21, then inspects the agent manifest, Java 11 bytecode, offline viewer security contract, release artifacts, extracted archives, English documentation, generated reports, and SHA-256 checksums. Missing required JDKs or failed checks are fatal; there are no mandatory skips.
+## Test layers
 
-The development model is task -> stage -> iteration -> cumulative regression. Each iteration uses its own `Iteration-NN` branch. Only an intended tree whose required gates pass is committed. Certification is repeated against the committed HEAD, then the branch is pushed and the remote hash must equal the local commit.
+### Transformer unit tests
 
-Spark and PySpark lanes described in the exhaustive plan are forward-looking unless corresponding adapters, dependencies, environments, and certification scripts exist in the release. Version 0.1 documentation does not claim certification beyond executable gates present in this repository.
+`MethodTracingTransformerTest` transforms a compiled fixture and verifies every JVM return category, internal versus escaping exceptions, exact `Throwable` identity, recursion, synchronization, overload descriptors, filtering, timing, and state preservation.
+
+### Serialization bridge unit tests
+
+`SparkSerializationBridgeTest` verifies exact returned/input `ByteBuffer` attribution, byte-accuracy labels, bounded root classes, nested suppression, non-negative timing, and fail-open behaviour.
+
+### Real Spark integration tests
+
+`SparkSerializerAgentIT` starts a new child JVM with the packaged shaded agent for each case. It loads the official `spark-core` artifact selected by the active profile and executes real Java and Kryo serializer boundaries and streams.
+
+Each lane verifies:
+
+1. The runtime Spark version equals the profile's pinned artifact.
+2. The runtime Scala binary version matches the artifact suffix.
+3. Java and Kryo boundary round trips preserve payload equality.
+4. Stream round trips preserve payload equality.
+5. Generic method tracing and Spark-specific analysis operate together.
+6. Serialize and deserialize expose exact positive `ByteBuffer` counts.
+7. Stream rows remain `UNAVAILABLE` for bytes.
+8. Coverage reports transformed classes and zero transformation failures.
+9. The report identifies the runtime as a supported Spark/Scala combination.
+10. A real registration-required Kryo failure is classified exceptionally.
+11. Payload values never appear in schema-v1 JSONL.
+
+## Certification matrix
+
+| Profile | Spark artifact | Scala | Required Java |
+|---|---|---|---|
+| `spark35-it` | `spark-core_2.12:3.5.9` | 2.12 | 11 or 17 |
+| `spark35-scala213-it` | `spark-core_2.13:3.5.9` | 2.13 | 11 or 17 |
+| `spark40-it` | `spark-core_2.13:4.0.4` | 2.13 | 17 or 21 |
+| `spark41-it` | `spark-core_2.13:4.1.3` | 2.13 | 17 or 21 |
+| `spark42-it` | `spark-core_2.13:4.2.0` | 2.13 | 17 or 21 |
+
+GitHub Actions runs the same matrix. Spark profiles are executed separately to prevent Scala 2.12/2.13 classpath contamination.
+
+## Commands
+
+```bash
+mvn -B clean verify
+mvn -B -Pspark35-it clean verify
+mvn -B -Pspark35-scala213-it clean verify
+mvn -B -Pspark40-it clean verify
+mvn -B -Pspark41-it clean verify
+mvn -B -Pspark42-it clean verify
+```
+
+Or execute every lane:
+
+```bash
+scripts/verify-spark-matrix.sh
+```
+
+## Release discipline
+
+When Apache Spark publishes a newer maintenance release:
+
+1. update the relevant profile pin;
+2. run `scripts/inspect-spark-signatures.sh` against its JARs;
+3. run that profile on every certified JDK;
+4. update the coverage metadata and documentation only after the lane passes.
+
+A line is never declared supported merely because source-level methods look similar.
