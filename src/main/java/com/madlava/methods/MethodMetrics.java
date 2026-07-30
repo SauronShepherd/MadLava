@@ -14,6 +14,7 @@ import com.madlava.tracing.TraceSampler;
 import com.madlava.tracing.ArgumentCapture;
 import com.madlava.tracing.SafeArgumentRenderer;
 import com.madlava.tracing.ArgumentRedactor;
+import com.madlava.tracing.ArgumentCanonicalizer;
 
 /** Lock-free inclusive method-boundary aggregation. */
 public final class MethodMetrics {
@@ -22,15 +23,22 @@ public final class MethodMetrics {
     private final ConcurrentHashMap<Integer, ConcurrentHashMap<ArgumentKey, LongAdder>> argumentGroups = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, LongAdder> droppedArgumentGroups = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, LongAdder> overflowArgumentInvocations = new ConcurrentHashMap<>();
-    private static final int MAX_ARGUMENT_GROUPS_PER_METHOD = 256;
+    private static final int DEFAULT_MAX_ARGUMENT_GROUPS_PER_METHOD = 256;
+    private final int maxArgumentGroupsPerMethod;
     private final LongAdder suppressedReentrantCallbacks = new LongAdder();
     private volatile Consumer<Map<String,Object>> traceSink;
     private volatile long traceConfigurationVersion;
     private volatile TraceSampler traceSampler = new TraceSampler(1.0);
     private volatile ArgumentCapture argumentCapture = new ArgumentCapture(new SafeArgumentRenderer(), new ArgumentRedactor(null, null), 16);
+    private volatile ArgumentCanonicalizer argumentCanonicalizer = new ArgumentCanonicalizer();
 
     public MethodMetrics(MethodRegistry registry) {
+        this(registry, DEFAULT_MAX_ARGUMENT_GROUPS_PER_METHOD);
+    }
+    public MethodMetrics(MethodRegistry registry, int maxArgumentGroupsPerMethod) {
         this.registry = registry;
+        if(maxArgumentGroupsPerMethod<1)throw new IllegalArgumentException("maxArgumentGroupsPerMethod must be positive");
+        this.maxArgumentGroupsPerMethod=maxArgumentGroupsPerMethod;
     }
 
     public void entered(int methodId) {
@@ -68,11 +76,11 @@ public final class MethodMetrics {
         MethodKey key=registry.key(methodId);
         if(key==null)return;
         try {
-            List<String> rendered = argumentCapture.capture(arguments);
+            List<String> rendered = argumentCanonicalizer.canonicalize(arguments);
             ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.computeIfAbsent(methodId, ignored -> new ConcurrentHashMap<>());
             ArgumentKey keyValue = new ArgumentKey(rendered);
             LongAdder group = groups.get(keyValue);
-            if(group == null && groups.size() >= MAX_ARGUMENT_GROUPS_PER_METHOD) {
+            if(group == null && groups.size() >= maxArgumentGroupsPerMethod) {
                 droppedArgumentGroups.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
                 overflowArgumentInvocations.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
                 return;

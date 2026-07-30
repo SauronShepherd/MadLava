@@ -121,6 +121,7 @@ public final class AgentOptions {
     public int methodMaxEntries() {
         return positiveInt("methodMaxEntries", DEFAULT_METHOD_MAX_ENTRIES);
     }
+    public int methodArgumentMaxGroups() { return positiveInt("methodArgumentMaxGroups", 256); }
 
     public boolean sparkSerializationEnabled() {
         return booleanValue("sparkSerialization", false);
@@ -202,6 +203,7 @@ public final class AgentOptions {
             putBoolean(values, "methodTracing", path(root, "features", "methodTracing", "enabled"));
             put(values, "methodTracingSampleRate", path(root, "features", "methodTracing", "sampleRate"));
             putPositiveInt(values, "methodMaxEntries", path(root, "features", "methodProfiling", "maxEntries"));
+            putPositiveInt(values, "methodArgumentMaxGroups", path(root, "features", "methodProfiling", "argumentGrouping", "maxGroupsPerMethod"));
             put(values, "methodInclude", joined(path(root, "filters", "methods", "includes")));
             put(values, "methodExclude", joined(path(root, "filters", "methods", "excludes")));
 

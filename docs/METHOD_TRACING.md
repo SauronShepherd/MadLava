@@ -19,6 +19,13 @@ watcher, live writer switching, streamed method-call records, and selective
 `COUNT_BY_ARGS` aggregation are implemented. Equal rendered argument tuples
 share one bounded aggregate counter rather than producing one event per call.
 
+COUNT_BY_ARGS uses a separate identity-free canonical grouping representation:
+arbitrary objects group by fully qualified runtime class name, arrays by component
+type and length, and lambda/hidden-class names drop `/0x...` and instance identity
+suffixes while preserving the lambda ordinal such as `$$Lambda$4243`. This is
+intended for within-JVM-run aggregation; lambda ordinals are not guaranteed to
+be stable across separate JVM runs.
+
 ## Contract
 
 For every selected non-constructor, non-native, non-abstract method, MadLava records:

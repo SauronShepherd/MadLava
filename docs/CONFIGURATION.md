@@ -45,6 +45,11 @@ Use `Class.method(*)` for aggregate `COUNT_BY_ARGS`. It preserves exact method
 totals and groups equal rendered argument tuples with bounded cardinality. This
 is distinct from per-invocation `TRACE_ARGS` events.
 
+The default argument-group limit is 256 unique canonical keys per method and
+can be changed with `features.methodProfiling.argumentGrouping.maxGroupsPerMethod`.
+Existing canonical keys continue incrementing at capacity; only unseen keys
+contribute to `overflowArgumentInvocations`.
+
 ## JSON configuration
 
 Copy the example and adjust the output directory and method filters:

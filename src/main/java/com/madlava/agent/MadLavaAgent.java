@@ -79,7 +79,7 @@ public final class MadLavaAgent {
                     : null;
             MethodMetrics methodMetrics = methodRegistry == null
                     ? null
-                    : new MethodMetrics(methodRegistry);
+                    : new MethodMetrics(methodRegistry, options.methodArgumentMaxGroups());
             if (methodMetrics != null) {
                 MethodProbeBridge.configure(methodMetrics);
                 methodBridgeConfigured = true;

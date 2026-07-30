@@ -24,6 +24,19 @@ public final class MadLavaStatistics {
     public static String methodProfilingSinceJson(String checkpointId) { return sectionSince(checkpointId,"methodProfiling"); }
     public static String sparkSerializationSinceJson(String checkpointId) { return sectionSince(checkpointId,"sparkSerialization"); }
     public static boolean releaseCheckpoint(String checkpointId) { boolean removed=CHECKPOINTS.remove(checkpointId)!=null;if(removed)CHECKPOINT_ORDER.remove(checkpointId);return removed; }
+    static Map<String,Object> snapshotMap(){AgentRuntime runtime=MadLavaRuntimeRegistry.current();return runtime==null?new LinkedHashMap<>():runtime.snapshot("api");}
+    static Map<String,Object> sinceMap(String id){
+        Map<String,Object> baseline=CHECKPOINTS.get(id); AgentRuntime runtime=MadLavaRuntimeRegistry.current();
+        if(baseline==null)return new LinkedHashMap<>(Map.of("status","ERROR","reason","UNKNOWN_CHECKPOINT"));
+        if(runtime==null)return new LinkedHashMap<>(Map.of("status","ERROR","reason","AGENT_UNAVAILABLE"));
+        Map<String,Object> current=runtime.snapshot("api-since"); Map<String,Object> result=new LinkedHashMap<>();
+        result.put("schemaVersion",current.getOrDefault("schemaVersion",1)); result.put("agentVersion",current.get("agentVersion"));
+        result.put("configurationVersion",current.getOrDefault("configurationVersion",0)); result.put("pid",current.get("pid"));
+        Map<String,Object> features=new LinkedHashMap<>();
+        features.put("methodProfiling",deltaSection(section(baseline,"methodProfiling"),section(current,"methodProfiling")));
+        features.put("sparkSerialization",deltaSection(section(baseline,"sparkSerialization"),section(current,"sparkSerialization")));
+        result.put("features",features); return result;
+    }
     private static String currentJson(String reason){AgentRuntime runtime=MadLavaRuntimeRegistry.current();return runtime==null?error("AGENT_UNAVAILABLE"):Json.encode(runtime.snapshot(reason));}
     private static String sectionJson(String section){AgentRuntime runtime=MadLavaRuntimeRegistry.current();if(runtime==null)return error("AGENT_UNAVAILABLE");Object value=runtime.snapshot("api").get("features");return Json.encode(value instanceof Map<?,?>?((Map<?,?>)value).get(section):null);}
     private static String sectionSince(String id,String section){Map<String,Object> baseline=CHECKPOINTS.get(id);if(baseline==null)return error("UNKNOWN_CHECKPOINT");AgentRuntime runtime=MadLavaRuntimeRegistry.current();if(runtime==null)return error("AGENT_UNAVAILABLE");Map<String,Object> current=runtime.snapshot("api");return Json.encode(deltaSection(section(baseline,section),section(current,section)));}
