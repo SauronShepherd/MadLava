@@ -137,6 +137,10 @@ public final class AgentRuntime {
         configuration.put("sparkSerializationProfile", options.sparkSerializationProfile().name());
         configuration.put("sparkSerializationRootClasses", options.sparkSerializationRootClasses());
         configuration.put("sparkSerializationMaxGroups", options.sparkSerializationMaxGroups());
+        configuration.put("reportMaxRows", options.reportMaxRows());
+        configuration.put("reportTruncate", options.reportTruncate());
+        for (String section : new String[]{"methodProfiling", "argumentGroups", "sparkSerialization", "sparkSerializationDetail", "diagnostics"})
+            configuration.put("reportMaxRows." + section, options.reportSectionMaxRows(section));
         root.put("effectiveConfiguration", configuration);
         return root;
     }

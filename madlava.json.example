@@ -4,7 +4,17 @@
   },
   "reporting": {
     "snapshotIntervalSeconds": 1,
-    "shutdownSnapshotOnly": false
+    "shutdownSnapshotOnly": false,
+    "human": {
+      "enabled": false,
+      "maxRows": 50,
+      "truncate": 100,
+      "sections": {
+        "methodProfiling": {"maxRows": 25},
+        "argumentGroups": {"maxRows": 20},
+        "sparkSerialization": {"maxRows": 30}
+      }
+    }
   },
   "features": {
     "methodProfiling": {

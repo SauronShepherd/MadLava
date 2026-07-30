@@ -20,6 +20,7 @@ public final class AgentOptions {
     public static final int DEFAULT_METHOD_MAX_ENTRIES = 2_048;
     public static final int DEFAULT_SERIALIZATION_MAX_GROUPS = 2_048;
     public static final int DEFAULT_SNAPSHOT_INTERVAL_SECONDS = 1;
+    public static final int DEFAULT_REPORT_MAX_ROWS = 50;
 
     private final Map<String, String> values;
     private final String configurationSource;
@@ -152,6 +153,9 @@ public final class AgentOptions {
     public boolean diagnosticsToStderr() {
         return booleanValue("diagnosticsToStderr", true);
     }
+    public int reportMaxRows() { return nonNegativeInt("reportMaxRows", DEFAULT_REPORT_MAX_ROWS); }
+    public int reportTruncate() { return nonNegativeInt("reportTruncate", 100); }
+    public int reportSectionMaxRows(String section) { return nonNegativeInt("reportMaxRows." + section, reportMaxRows()); }
 
     public String value(String key, String fallback) {
         String value = values.get(key);
@@ -198,6 +202,10 @@ public final class AgentOptions {
             putPositiveInt(values, "snapshotIntervalSeconds", path(root, "reporting", "snapshotIntervalSeconds"));
             putBoolean(values, "shutdownSnapshotOnly", path(root, "reporting", "shutdownSnapshotOnly"));
             putBoolean(values, "hotReload", path(root, "configuration", "hotReload", "enabled"));
+            putNonNegativeInt(values, "reportMaxRows", path(root, "reporting", "human", "maxRows"));
+            putNonNegativeInt(values, "reportTruncate", path(root, "reporting", "human", "truncate"));
+            String[] reportSections={"methodProfiling","argumentGroups","sparkSerialization","sparkSerializationDetail","diagnostics"};
+            for(String section:reportSections)putNonNegativeInt(values,"reportMaxRows."+section,path(root,"reporting","human","sections",section,"maxRows"));
 
             putBoolean(values, "methodProfiling", path(root, "features", "methodProfiling", "enabled"));
             putBoolean(values, "methodTracing", path(root, "features", "methodTracing", "enabled"));
@@ -277,6 +285,12 @@ public final class AgentOptions {
         }
         values.put(key, String.valueOf(((Number) value).longValue()));
     }
+    private static void putNonNegativeInt(Map<String, String> values, String key, Object value) {
+        if (value == null) return;
+        if (!(value instanceof Number) || ((Number) value).longValue() < 0 || ((Number) value).longValue() > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("Invalid configuration: " + key + " expected non-negative integer");
+        values.put(key, String.valueOf(((Number) value).longValue()));
+    }
 
     private boolean booleanValue(String key, boolean fallback) {
         String value = values.get(key);
@@ -294,5 +308,9 @@ public final class AgentOptions {
         } catch (NumberFormatException ignored) {
             return fallback;
         }
+    }
+    private int nonNegativeInt(String key, int fallback) {
+        String value=values.get(key); if(value==null||value.isBlank())return fallback;
+        try { int parsed=Integer.parseInt(value); return parsed>=0?parsed:fallback; } catch(NumberFormatException ignored){return fallback;}
     }
 }

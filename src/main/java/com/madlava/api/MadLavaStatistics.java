@@ -32,6 +32,7 @@ public final class MadLavaStatistics {
         Map<String,Object> current=runtime.snapshot("api-since"); Map<String,Object> result=new LinkedHashMap<>();
         result.put("schemaVersion",current.getOrDefault("schemaVersion",1)); result.put("agentVersion",current.get("agentVersion"));
         result.put("configurationVersion",current.getOrDefault("configurationVersion",0)); result.put("pid",current.get("pid"));
+        result.put("effectiveConfiguration", current.get("effectiveConfiguration"));
         Map<String,Object> features=new LinkedHashMap<>();
         features.put("methodProfiling",deltaSection(section(baseline,"methodProfiling"),section(current,"methodProfiling")));
         features.put("sparkSerialization",deltaSection(section(baseline,"sparkSerialization"),section(current,"sparkSerialization")));

@@ -71,6 +71,9 @@ Explicit agent options override values loaded from the JSON file. The current JS
 | `output.directory` | Root directory for MadLava evidence |
 | `reporting.snapshotIntervalSeconds` | Periodic snapshot interval |
 | `reporting.shutdownSnapshotOnly` | Emit only the shutdown snapshot when `true` |
+| `reporting.human.maxRows` | Default human-report rows per section; `0` is unlimited |
+| `reporting.human.truncate` | Maximum displayed cell length |
+| `reporting.human.sections.<name>.maxRows` | Override rows for `methodProfiling`, `argumentGroups`, `sparkSerialization`, `sparkSerializationDetail`, or `diagnostics` |
 | `features.methodProfiling` | Enable bounded JVM method aggregation |
 | `features.sparkSerialization` | Enable Java/Kryo serializer boundary profiling |
 | `filters.methods.includes` | Semicolon-separated method patterns after loading |

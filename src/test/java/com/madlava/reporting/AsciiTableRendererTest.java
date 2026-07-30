@@ -13,4 +13,8 @@ class AsciiTableRendererTest {
         String table=AsciiTableRenderer.render(List.of("NAME"),List.of(),50,100);
         assertTrue(table.startsWith("+")); assertTrue(table.contains("NAME"));
     }
+    @Test void zeroMeansUnlimited() {
+        String table=AsciiTableRenderer.render(List.of("NAME"),List.of(List.of("a"),List.of("b")),0,100);
+        assertTrue(table.contains("a")); assertTrue(table.contains("b")); assertFalse(table.contains("omitted"));
+    }
 }
