@@ -7,8 +7,10 @@ import java.util.Map;
 
 /** Small strict JSON parser used only for the bounded agent configuration document. */
 final class SimpleJsonParser {
+    private static final int MAX_NESTING = 64;
     private final String input;
     private int index;
+    private int nesting;
 
     private SimpleJsonParser(String input) {
         this.input = input;
@@ -50,7 +52,7 @@ final class SimpleJsonParser {
                 literal("null");
                 return null;
             default:
-                if (current == '-' || Character.isDigit(current)) {
+                if (current == '-' || asciiDigit(current)) {
                     return number();
                 }
                 throw error("Unexpected character '" + current + "'");
@@ -58,50 +60,52 @@ final class SimpleJsonParser {
     }
 
     private Map<String, Object> object() {
-        expect('{');
-        Map<String, Object> values = new LinkedHashMap<>();
-        whitespace();
-        if (peek('}')) {
-            index++;
-            return values;
-        }
-        while (true) {
+        enterContainer();
+        try {
+            expect('{');
+            Map<String, Object> values = new LinkedHashMap<>();
             whitespace();
-            if (!peek('"')) {
-                throw error("Object key must be a string");
+            if (peek('}')) { index++; return values; }
+            while (true) {
+                whitespace();
+                if (!peek('"')) throw error("Object key must be a string");
+                String key = string();
+                if (values.containsKey(key)) throw error("Duplicate object key '" + key + "'");
+                whitespace();
+                expect(':');
+                values.put(key, value());
+                whitespace();
+                if (peek('}')) { index++; return values; }
+                expect(',');
             }
-            String key = string();
-            if (values.containsKey(key)) {
-                throw error("Duplicate object key '" + key + "'");
-            }
-            whitespace();
-            expect(':');
-            values.put(key, value());
-            whitespace();
-            if (peek('}')) {
-                index++;
-                return values;
-            }
-            expect(',');
+        } finally {
+            nesting--;
         }
     }
 
     private List<Object> array() {
-        expect('[');
-        List<Object> values = new ArrayList<>();
-        whitespace();
-        if (peek(']')) {
-            index++;
-            return values;
-        }
-        while (true) {
-            values.add(value());
+        enterContainer();
+        try {
+            expect('[');
+            List<Object> values = new ArrayList<>();
             whitespace();
-            if (peek(']')) {
-                index++;
-                return values;
+            if (peek(']')) { index++; return values; }
+            while (true) {
+                values.add(value());
+                whitespace();
+                if (peek(']')) { index++; return values; }
+                expect(',');
             }
-            expect(',');
+        } finally {
+            nesting--;
+        }
+    }
+
+    private void enterContainer() {
+        nesting++;
+        if (nesting > MAX_NESTING) {
+            nesting--;
+            throw error("JSON nesting exceeds " + MAX_NESTING);
         }
     }
 
@@ -158,7 +162,11 @@ final class SimpleJsonParser {
         if (peek('-')) {
             index++;
         }
+        int integerStart = index;
         digits();
+        if (index - integerStart > 1 && input.charAt(integerStart) == '0') {
+            throw error("Leading zero in number");
+        }
         boolean decimal = false;
         if (peek('.')) {
             decimal = true;
@@ -176,7 +184,9 @@ final class SimpleJsonParser {
         String text = input.substring(start, index);
         try {
             if (decimal) {
-                return Double.parseDouble(text);
+                double parsed = Double.parseDouble(text);
+                if (!Double.isFinite(parsed)) throw error("Non-finite number: " + text);
+                return parsed;
             }
             return Long.parseLong(text);
         } catch (NumberFormatException failure) {
@@ -186,7 +196,7 @@ final class SimpleJsonParser {
 
     private void digits() {
         int start = index;
-        while (!finished() && Character.isDigit(input.charAt(index))) {
+        while (!finished() && asciiDigit(input.charAt(index))) {
             index++;
         }
         if (start == index) {
@@ -214,9 +224,15 @@ final class SimpleJsonParser {
     }
 
     private void whitespace() {
-        while (!finished() && Character.isWhitespace(input.charAt(index))) {
+        while (!finished()) {
+            char current = input.charAt(index);
+            if (current != ' ' && current != '\t' && current != '\r' && current != '\n') break;
             index++;
         }
+    }
+
+    private static boolean asciiDigit(char value) {
+        return value >= '0' && value <= '9';
     }
 
     private boolean finished() {

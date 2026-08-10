@@ -13,10 +13,13 @@ debounce support for normal and replace-style editor saves. Invalid or
 temporarily missing files are ignored safely, and the watcher is closed by the
 agent shutdown hook.
 
-The configuration core, method rule model, safe renderer, sampling, and
-redaction primitives are available. Reporter output switching, streamed trace
-records, and JVM retransformation orchestration remain the next integration
-step; the existing reporter remains startup-configured for now.
+The configuration core, method rule model, safe renderer, sampling, streamed
+trace records, live reporter output switching, and JVM retransformation
+orchestration are implemented. Method include/exclude rules can be changed live
+only when the JVM supports class retransformation; otherwise MadLava rejects the
+change as restart-required rather than reporting a partially applied filter.
+Settings whose underlying instrumentation/capacity cannot be rebuilt safely at
+runtime are likewise rejected as restart-required.
 
 ## Method observation rules
 
@@ -42,8 +45,11 @@ events for selected methods. It is disabled by default; enabling ordinary
 method profiling does not enable tracing.
 
 Use `Class.method(*)` for aggregate `COUNT_BY_ARGS`. It preserves exact method
-totals and groups equal rendered argument tuples with bounded cardinality. This
-is distinct from per-invocation `TRACE_ARGS` events.
+totals and groups equal canonical argument tuples with bounded cardinality.
+Scalar literals are represented by per-run salted fingerprints rather than the
+original values; arbitrary objects group by bounded type shape. This is distinct from the dormant per-invocation `TRACE_ARGS` model in the source tree.
+`TRACE_ARGS` is **not exposed by the active 0.1.0 configuration** and should not be
+documented or relied on as a supported runtime mode.
 
 The default argument-group limit is 256 unique canonical keys per method and
 can be changed with `features.methodProfiling.argumentGrouping.maxGroupsPerMethod`.
@@ -51,6 +57,11 @@ Existing canonical keys continue incrementing at capacity; only unseen keys
 contribute to `overflowArgumentInvocations`.
 
 ## JSON configuration
+
+Configuration files use the nested object form shown below. Literal dotted JSON
+property names such as `"output.directory"` are rejected; canonical dotted names are
+reserved for the programmatic runtime-configuration API. This prevents startup and
+hot-reload parsers from interpreting one file differently.
 
 Copy the example and adjust the output directory and method filters:
 
@@ -117,7 +128,7 @@ MadLava does not generate `output.trc`. It writes schema-v1 JSONL evidence using
 <output.directory>/run-<pid>-<nonce>/madlava.jsonl
 ```
 
-`madlava-run.json` is a small discovery manifest containing the PID and absolute report path. The nested run directory prevents concurrent Spark drivers from mixing evidence into one file.
+`madlava-run-<pid>.json` is a small discovery manifest containing the PID and absolute report path. It is published only after the JSONL destination has passed the writer's synchronous openability check and the writer has started, so a manifest never intentionally advertises an unstarted run. The nested run directory prevents concurrent Spark drivers from mixing evidence into one file.
 
 The agent prints the exact report path to stderr during startup:
 

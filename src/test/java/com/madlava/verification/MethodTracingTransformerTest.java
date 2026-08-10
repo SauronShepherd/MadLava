@@ -3,6 +3,7 @@ package com.madlava.verification;
 import com.madlava.instrumentation.MadLavaTransformer;
 import com.madlava.methods.MethodFilter;
 import com.madlava.methods.MethodMetrics;
+import com.madlava.methods.MethodObservationPlan;
 import com.madlava.methods.MethodProbeBridge;
 import com.madlava.methods.MethodRegistry;
 import com.madlava.serialization.SparkSerializationPlan;
@@ -97,6 +98,72 @@ final class MethodTracingTransformerTest {
         List<Map<String, Object>> methods = (List<Map<String, Object>>) metrics.report().get("methods");
         assertEquals(1, methods.size());
         assertEquals("(I)I", methods.get(0).get("descriptor"));
+    }
+
+
+
+    @Test
+    void countByArgsIsRecordedAtInvocationEntryEvenWhileMethodIsStillRunning() throws Exception {
+        String include = "fixtures.SampleTarget.blockOn(*)";
+        MethodRegistry registry = new MethodRegistry(16);
+        MethodMetrics metrics = new MethodMetrics(registry);
+        MethodProbeBridge.configure(metrics);
+        MadLavaTransformer transformer = new MadLavaTransformer(
+                true, MethodFilter.parse(include, ""), registry, false,
+                new SparkSerializationPlan(SparkSerializationProfile.ALL),
+                MethodObservationPlan.compile(List.of(include)));
+        Object target = new TransformingClassLoader(
+                transformer, List.of("fixtures.SampleTarget"), "fixtures.")
+                .loadClass("fixtures.SampleTarget").getConstructor().newInstance();
+
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread worker = new Thread(() -> {
+            try { invoke(target, "blockOn", new Class<?>[]{java.util.concurrent.CountDownLatch.class, java.util.concurrent.CountDownLatch.class, String.class}, entered, release, "scope"); }
+            catch (Throwable t) { failure.set(t); }
+        });
+        worker.start();
+        assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        try {
+            Map<String,Object> row = findMethod(metrics, "blockOn", "(Ljava/util/concurrent/CountDownLatch;Ljava/util/concurrent/CountDownLatch;Ljava/lang/String;)V");
+            assertEquals(1L, number(row, "invocations"));
+            assertEquals(0L, number(row, "timedCompletions"));
+            @SuppressWarnings("unchecked") List<Map<String,Object>> groups = (List<Map<String,Object>>) row.get("argumentGroups");
+            assertEquals(1L, groups.stream().mapToLong(group -> number(group, "invocations")).sum());
+        } finally {
+            release.countDown(); worker.join(2000L);
+        }
+        assertEquals(null, failure.get());
+    }
+
+    @Test
+    void exactArgumentObservationRuleCannotOverrideExclusion() throws Exception {
+        String include = "fixtures.SampleTarget.overloaded(*)#(I)I";
+        String exclude = "fixtures.SampleTarget.overloaded#(I)I";
+        MethodRegistry registry = new MethodRegistry(16);
+        MethodMetrics metrics = new MethodMetrics(registry);
+        MethodProbeBridge.configure(metrics);
+        MadLavaTransformer transformer = new MadLavaTransformer(
+                true,
+                MethodFilter.parse(include, exclude),
+                registry,
+                false,
+                new SparkSerializationPlan(SparkSerializationProfile.ALL),
+                MethodObservationPlan.compile(List.of(include)));
+        Object target = new TransformingClassLoader(
+                transformer,
+                List.of("fixtures.SampleTarget"),
+                "fixtures.")
+                .loadClass("fixtures.SampleTarget")
+                .getConstructor()
+                .newInstance();
+
+        assertEquals(11, invoke(target, "overloaded", new Class<?>[]{int.class}, 1));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> methods = (List<Map<String, Object>>) metrics.report().get("methods");
+        assertTrue(methods.isEmpty(), "Excluded method was unexpectedly instrumented");
     }
 
     private static Object invoke(Object target, String name, Class<?>[] parameterTypes, Object... values)

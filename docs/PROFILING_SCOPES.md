@@ -24,4 +24,4 @@ print(reports.scopeReportText(result))
 
 Invalid or unavailable operations return a structured JSON error, including `INVALID_SCOPE_NAME`, `UNKNOWN_SCOPE_OR_ALREADY_ENDED`, and `UNKNOWN_OR_EXPIRED_SCOPE_RESULT`.
 
-Use checkpoints directly when you need low-level baselines or multiple independent statistics queries. Scopes are the preferred API for named application or notebook experiments.
+Use checkpoints directly when you need low-level baselines or multiple independent statistics queries. Scopes are the preferred API for named application or notebook experiments. Scope statistics use true interval deltas for method counters, nested argument groups, serialization groups, and cumulative diagnostic counters. Interval averages are recomputed from interval totals; min/max duration values are `null` when the row predates the scope because cumulative extrema cannot be losslessly converted to interval extrema.

@@ -30,3 +30,5 @@ Human report rows are semantically sorted before formatting and limiting:
 The default display limit is 50 rows per section. Configure `reporting.human.maxRows` globally and override it with `reporting.human.sections.<section>.maxRows` for `methodProfiling`, `argumentGroups`, `sparkSerialization`, `sparkSerializationDetail`, or `diagnostics`. A value of `0` means unlimited; negative values are invalid. Omitted rows are reported explicitly. These are display limits only and do not change profiler retention or Runtime Statistics API data.
 
 Limits apply equally to in-memory, scope, checkpoint, Markdown, and persisted human reports, including diskless mode.
+
+Rows are collected, sorted by the section's numeric relevance, limited, and only then formatted. Therefore a limited serialization report contains the highest-`CALLS` rows, while a limited method or argument report contains the highest-`INVOCATIONS` rows. The exact omitted count is printed below each truncated table.

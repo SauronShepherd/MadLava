@@ -40,9 +40,11 @@ public final class MethodPattern {
         if (descriptorSeparator >= 0) {
             identity = trimmed.substring(0, descriptorSeparator).trim();
             descriptorText = trimmed.substring(descriptorSeparator + 1).trim();
-            if (descriptorText.isEmpty()) {
-                descriptorText = "*";
-            }
+            if (descriptorText.isEmpty())
+                throw new IllegalArgumentException("Method descriptor after # cannot be empty: " + source);
+            if (descriptorText.indexOf('*') < 0 && descriptorText.indexOf('?') < 0
+                    && !MethodRuleParser.validMethodDescriptor(descriptorText))
+                throw new IllegalArgumentException("Invalid method descriptor: " + descriptorText);
         }
 
         int methodSeparator = identity.lastIndexOf('.');
@@ -64,6 +66,11 @@ public final class MethodPattern {
         return owner.matcher(ownerName).matches()
                 && method.matcher(methodName).matches()
                 && descriptor.matcher(methodDescriptor).matches();
+    }
+
+    /** Fast class-level prefilter using the already-compiled owner expression. */
+    public boolean matchesOwner(String ownerName) {
+        return owner.matcher(ownerName).matches();
     }
 
     public String source() {

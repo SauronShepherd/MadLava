@@ -12,7 +12,9 @@
       "sections": {
         "methodProfiling": {"maxRows": 25},
         "argumentGroups": {"maxRows": 20},
-        "sparkSerialization": {"maxRows": 30}
+        "sparkSerialization": {"maxRows": 30},
+        "sparkSerializationDetail": {"maxRows": 100},
+        "diagnostics": {"maxRows": 50}
       }
     }
   },

@@ -12,6 +12,8 @@ public final class MadLavaScopes {
     private static final int MAX_ACTIVE = 64, MAX_RESULTS = 64;
     private static final AtomicLong IDS = new AtomicLong(), RESULT_IDS = new AtomicLong();
     private static final ConcurrentHashMap<String, Active> ACTIVE = new ConcurrentHashMap<>();
+    /** Guarded by ACTIVE; ending scopes still own a pinned checkpoint until their delta is captured. */
+    private static int ENDING_SCOPES;
     private static final ConcurrentHashMap<String, ScopeResult> RESULTS = new ConcurrentHashMap<>();
     private static final Deque<String> RESULT_ORDER = new ArrayDeque<>();
     private MadLavaScopes() { }
@@ -20,45 +22,90 @@ public final class MadLavaScopes {
 
     public static String beginScope(String name) {
         if (!isAvailable()) return error("AGENT_UNAVAILABLE");
-        if (name == null || name.isBlank() || name.length() > 256) return error("INVALID_SCOPE_NAME");
-        synchronized (ACTIVE) { if (ACTIVE.size() >= MAX_ACTIVE) return error("TOO_MANY_ACTIVE_SCOPES"); }
-        String checkpoint = MadLavaStatistics.checkpoint();
-        if (checkpoint.isEmpty()) return error("AGENT_UNAVAILABLE");
-        AgentRuntime runtime = MadLavaRuntimeRegistry.current();
-        Map<String,Object> start = runtime.snapshot("scope-start");
-        String id = "scope-" + String.format("%016d", IDS.incrementAndGet());
-        ACTIVE.put(id, new Active(id, name, checkpoint, Instant.now(), System.nanoTime(), number(start.get("configurationVersion"))));
-        return id;
+        if (name == null || name.isBlank() || name.length() > 256 || containsControlCharacter(name)) return error("INVALID_SCOPE_NAME");
+        // Admission and insertion must be one critical section. A check-then-put race here
+        // allowed concurrent callers to exceed MAX_ACTIVE (and consume checkpoint slots).
+        synchronized (ACTIVE) {
+            if (ACTIVE.size() + ENDING_SCOPES >= MAX_ACTIVE) return error("TOO_MANY_ACTIVE_SCOPES");
+            String checkpoint = MadLavaStatistics.pinnedCheckpoint();
+            if (checkpoint.isEmpty()) return error("AGENT_UNAVAILABLE");
+            if (MadLavaRuntimeRegistry.current() == null) {
+                MadLavaStatistics.releaseCheckpoint(checkpoint);
+                return error("AGENT_UNAVAILABLE");
+            }
+            String id = "scope-" + String.format("%016d", IDS.incrementAndGet());
+            ACTIVE.put(id, new Active(
+                    id,
+                    name,
+                    checkpoint,
+                    MadLavaStatistics.checkpointCreatedAt(checkpoint),
+                    System.nanoTime(),
+                    MadLavaStatistics.checkpointConfigurationVersion(checkpoint)));
+            return id;
+        }
     }
 
     public static String endScope(String scopeId) {
-        Active scope = ACTIVE.remove(scopeId);
-        if (scope == null) return error("UNKNOWN_SCOPE_OR_ALREADY_ENDED");
+        if (scopeId == null || scopeId.isBlank()) return error("UNKNOWN_SCOPE_OR_ALREADY_ENDED");
+        Active scope;
+        synchronized (ACTIVE) {
+            scope = ACTIVE.remove(scopeId);
+            if (scope == null) return error("UNKNOWN_SCOPE_OR_ALREADY_ENDED");
+            // Do not advertise this capacity slot as free while the scope still owns a pinned
+            // checkpoint; beginScope() and checkpoint admission share the same bounded resource.
+            ENDING_SCOPES++;
+        }
         try {
             Map<String,Object> statistics = MadLavaStatistics.sinceMap(scope.checkpoint);
-            MadLavaStatistics.releaseCheckpoint(scope.checkpoint);
             if ("ERROR".equals(statistics.get("status"))) return error("SCOPE_DELTA_UNAVAILABLE");
-            AgentRuntime runtime = MadLavaRuntimeRegistry.current();
-            Map<String,Object> end = runtime == null ? Map.of() : runtime.snapshot("scope-end");
             String resultId = "scope-result-" + String.format("%016d", RESULT_IDS.incrementAndGet());
             ScopeResult result = new ScopeResult(resultId, scope, Instant.now(), Math.max(0L, System.nanoTime() - scope.startedNanos),
-                    number(end.get("configurationVersion")), statistics);
-            synchronized (RESULT_ORDER) { while (RESULT_ORDER.size() >= MAX_RESULTS) RESULTS.remove(RESULT_ORDER.removeFirst()); RESULT_ORDER.addLast(resultId); }
-            RESULTS.put(resultId, result);
+                    number(statistics.get("configurationVersion")), statistics);
+            // Publish the result and its eviction-order entry atomically. Otherwise another
+            // endScope could evict an id before its result had even been inserted, leaking it.
+            synchronized (RESULT_ORDER) {
+                while (RESULT_ORDER.size() >= MAX_RESULTS) RESULTS.remove(RESULT_ORDER.removeFirst());
+                RESULTS.put(resultId, result);
+                RESULT_ORDER.addLast(resultId);
+            }
             return resultId;
         } catch (RuntimeException ex) {
-            MadLavaStatistics.releaseCheckpoint(scope.checkpoint);
             return error("SCOPE_END_FAILED");
+        } finally {
+            MadLavaStatistics.releaseCheckpoint(scope.checkpoint);
+            synchronized (ACTIVE) { ENDING_SCOPES--; }
         }
     }
 
     public static String endScopeReportText(String scopeId) { String result = endScope(scopeId); return result.startsWith("scope-result-") ? MadLavaReport.scopeReportText(result) : result; }
-    public static String scopeResultJson(String resultId) { ScopeResult result = RESULTS.get(resultId); return result == null ? error("UNKNOWN_OR_EXPIRED_SCOPE_RESULT") : Json.encode(result.asMap()); }
-    public static boolean releaseScopeResult(String resultId) { return RESULTS.remove(resultId) != null; }
+    public static String scopeResultJson(String resultId) { if(resultId==null||resultId.isBlank())return error("UNKNOWN_OR_EXPIRED_SCOPE_RESULT");ScopeResult result = RESULTS.get(resultId); return result == null ? error("UNKNOWN_OR_EXPIRED_SCOPE_RESULT") : Json.encode(result.asMap()); }
+    public static boolean releaseScopeResult(String resultId) {
+        if(resultId==null||resultId.isBlank())return false;
+        synchronized (RESULT_ORDER) {
+            boolean removed = RESULTS.remove(resultId) != null;
+            if (removed) RESULT_ORDER.remove(resultId);
+            return removed;
+        }
+    }
     public static String activeScopesJson() { return Json.encode(ACTIVE.keySet()); }
-    public static String scopeStatusJson(String scopeId) { Active a=ACTIVE.get(scopeId); return a==null?error("UNKNOWN_SCOPE"):Json.encode(Map.of("status","OK","scopeId",scopeId,"scopeName",a.name,"state","ACTIVE")); }
+    public static String scopeStatusJson(String scopeId) { if(scopeId==null||scopeId.isBlank())return error("UNKNOWN_SCOPE");Active a=ACTIVE.get(scopeId); return a==null?error("UNKNOWN_SCOPE"):Json.encode(Map.of("status","OK","scopeId",scopeId,"scopeName",a.name,"state","ACTIVE")); }
 
-    static ScopeResult result(String id) { return RESULTS.get(id); }
+    static ScopeResult result(String id) { return id==null||id.isBlank()?null:RESULTS.get(id); }
+    static void resetForTests() {
+        synchronized (ACTIVE) {
+            for (Active active : ACTIVE.values()) MadLavaStatistics.releaseCheckpoint(active.checkpoint);
+            ACTIVE.clear();
+            ENDING_SCOPES = 0;
+        }
+        synchronized (RESULT_ORDER) { RESULTS.clear(); RESULT_ORDER.clear(); }
+    }
+    private static boolean containsControlCharacter(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char current=value.charAt(index);
+            if (Character.isISOControl(current) || current=='\u2028' || current=='\u2029') return true;
+        }
+        return false;
+    }
     private static long number(Object v) { return v instanceof Number ? ((Number)v).longValue() : 0; }
     private static String error(String reason) { return Json.encode(Map.of("status","ERROR","reason",reason)); }
 

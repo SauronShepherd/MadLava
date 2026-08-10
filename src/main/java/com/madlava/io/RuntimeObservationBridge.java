@@ -17,26 +17,35 @@ public final class RuntimeObservationBridge {
     private RuntimeObservationBridge(){}
 
     public static void io(String operation,String observedLayer,long actual,boolean success){
-        if(excluded(observedLayer))return;
-        String key=boundedKey(IO,operation+'|'+safeLayer(observedLayer));Counters counters=IO.computeIfAbsent(key,ignored->new Counters());
-        counters.operations.increment();if(!success)counters.errors.increment();else if(actual<0)counters.eof.increment();else counters.bytes.add(actual);
+        try {
+            if(excluded(observedLayer))return;
+            Counters counters=countersFor(IO,safeLayer(operation)+'|'+safeLayer(observedLayer));
+            counters.operations.increment();if(!success)counters.errors.increment();else if(actual<0)counters.eof.increment();else counters.bytes.add(actual);
+        } catch (Throwable ignored) { /* profiler accounting must never alter application I/O */ }
     }
 
-    public static boolean serializationEnter(){int depth=SERIALIZATION_DEPTH.get();SERIALIZATION_DEPTH.set(depth+1);return depth==0;}
+    public static boolean serializationEnter(){
+        try { int depth=SERIALIZATION_DEPTH.get();SERIALIZATION_DEPTH.set(depth+1);return depth==0; }
+        catch(Throwable ignored){return false;}
+    }
     public static void serializationExit(boolean root,String implementation,long bytes,boolean success,String method,String accuracy){
-        int depth=Math.max(0,SERIALIZATION_DEPTH.get()-1);if(depth==0)SERIALIZATION_DEPTH.remove();else SERIALIZATION_DEPTH.set(depth);
-        if(!root)return;String key=boundedKey(SERIALIZATION,safeLayer(implementation)+'|'+safeLayer(method)+'|'+safeLayer(accuracy));Counters counters=SERIALIZATION.computeIfAbsent(key,ignored->new Counters());counters.operations.increment();if(success&&bytes>=0)counters.bytes.add(bytes);else if(!success)counters.errors.increment();
+        try {
+            int depth=Math.max(0,SERIALIZATION_DEPTH.get()-1);if(depth==0)SERIALIZATION_DEPTH.remove();else SERIALIZATION_DEPTH.set(depth);
+            if(!root)return;Counters counters=countersFor(SERIALIZATION,safeLayer(implementation)+'|'+safeLayer(method)+'|'+safeLayer(accuracy));counters.operations.increment();if(success&&bytes>=0)counters.bytes.add(bytes);else if(!success)counters.errors.increment();
+        } catch(Throwable ignored){
+            try{SERIALIZATION_DEPTH.remove();}catch(Throwable suppressed){/* fail-open */}
+        }
     }
 
     public static String anonymizeEndpoint(String endpoint){
-        if(endpoint==null)return "unknown";try{byte[] digest=MessageDigest.getInstance("SHA-256").digest(endpoint.getBytes(StandardCharsets.UTF_8));StringBuilder value=new StringBuilder("endpoint-");for(int i=0;i<8;i++)value.append(String.format("%02x",digest[i]));return value.toString();}catch(Exception ignored){return "endpoint-unavailable";}
+        if(endpoint==null)return "unknown";try{byte[] digest=MessageDigest.getInstance("SHA-256").digest(endpoint.getBytes(StandardCharsets.UTF_8));StringBuilder value=new StringBuilder("endpoint-");for(int i=0;i<8;i++)value.append(String.format("%02x",digest[i]));return value.toString();}catch(Throwable ignored){return "endpoint-unavailable";}
     }
 
     public static Snapshot snapshot(){return new Snapshot(copy(IO),copy(SERIALIZATION));}
     static void resetForTests(){IO.clear();SERIALIZATION.clear();SERIALIZATION_DEPTH.remove();}
     private static boolean excluded(String layer){return Thread.currentThread().getName().startsWith("madlava-")||(layer!=null&&layer.startsWith("com.madlava."));}
     private static String safeLayer(String value){if(value==null||value.isBlank())return "unknown";return value.length()>160?value.substring(0,160):value;}
-    private static String boundedKey(ConcurrentHashMap<String,Counters> map,String key){return map.containsKey(key)||map.size()<MAX_GROUPS?key:"other";}
+    private static Counters countersFor(ConcurrentHashMap<String,Counters> map,String key){Counters existing=map.get(key);if(existing!=null)return existing;synchronized(map){existing=map.get(key);if(existing!=null)return existing;if(map.size()>=MAX_GROUPS-1){return map.computeIfAbsent("other",ignored->new Counters());}Counters created=new Counters();map.put(key,created);return created;}}
     private static Map<String,Metric> copy(ConcurrentHashMap<String,Counters> source){Map<String,Metric> result=new LinkedHashMap<>();source.forEach((key,value)->result.put(key,new Metric(value.operations.sum(),value.bytes.sum(),value.eof.sum(),value.errors.sum())));return Collections.unmodifiableMap(result);}
     private static final class Counters{final LongAdder operations=new LongAdder(),bytes=new LongAdder(),eof=new LongAdder(),errors=new LongAdder();}
     public static final class Metric{public final long operations,bytes,eof,errors;private Metric(long operations,long bytes,long eof,long errors){this.operations=operations;this.bytes=bytes;this.eof=eof;this.errors=errors;}public Map<String,Object> report(){return Map.of("operations",operations,"bytes",bytes,"eof",eof,"errors",errors);}}

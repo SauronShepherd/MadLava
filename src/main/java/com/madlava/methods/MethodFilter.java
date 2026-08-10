@@ -34,17 +34,9 @@ public final class MethodFilter {
             return false;
         }
         // A conservative check is intentional. Exact method matching still occurs in visitMethod.
-        return includes.stream().anyMatch(pattern -> {
-            String source = pattern.source();
-            int hash = source.indexOf('#');
-            String identity = hash >= 0 ? source.substring(0, hash) : source;
-            int lastDot = identity.lastIndexOf('.');
-            if (lastDot < 1) {
-                return false;
-            }
-            String classGlob = identity.substring(0, lastDot);
-            return MethodPattern.compile(classGlob + ".*").matches(owner, "x", "()V");
-        });
+        // Reuse the owner's precompiled pattern: class loading is a hot path and must not compile
+        // a fresh regex for every include rule and every loaded class.
+        return includes.stream().anyMatch(pattern -> pattern.matchesOwner(owner));
     }
 
     public List<String> includeSources() {
@@ -64,14 +56,16 @@ public final class MethodFilter {
         if (raw == null || raw.isBlank()) {
             return patterns;
         }
-        for (String part : raw.split(";")) {
+        for (String part : MethodRuleList.split(raw)) {
             String trimmed = part.trim();
             if (!trimmed.isEmpty()) {
-                // (*) is an observation-mode suffix, not part of the method identity.
-                if (trimmed.endsWith("(*)")) {
-                    trimmed = trimmed.substring(0, trimmed.length() - 3);
-                }
-                patterns.add(MethodPattern.compile(trimmed));
+                // (*) is an observation-mode suffix, not part of the method identity. It may
+                // appear immediately before an optional #descriptor.
+                int hash = trimmed.indexOf('#');
+                String identity = hash >= 0 ? trimmed.substring(0, hash) : trimmed;
+                String descriptor = hash >= 0 ? trimmed.substring(hash) : "";
+                if (identity.endsWith("(*)")) identity = identity.substring(0, identity.length() - 3);
+                patterns.add(MethodPattern.compile(identity + descriptor));
             }
         }
         return patterns;

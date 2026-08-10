@@ -54,6 +54,11 @@ public class SampleTarget {
         return value + 1;
     }
 
+    public void blockOn(java.util.concurrent.CountDownLatch entered, java.util.concurrent.CountDownLatch release, String label) throws InterruptedException {
+        entered.countDown();
+        release.await();
+    }
+
     public int overloaded(int value) {
         return value + 10;
     }

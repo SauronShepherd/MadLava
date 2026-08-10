@@ -1,3 +1,33 @@
 package com.madlava.agent;
-import static org.junit.jupiter.api.Assertions.*; import java.nio.file.Path; import org.junit.jupiter.api.Test;
-class MadLavaAgentTest { @Test void outputArgumentIsNormalized(){Path p=MadLavaAgent.parseOutput("output=target/agent-output");assertTrue(p.isAbsolute());assertTrue(p.endsWith(Path.of("target","agent-output")));} @Test void hashIsStable() throws Exception {assertEquals(MadLavaAgent.sha256("x"),MadLavaAgent.sha256("x"));assertEquals(64,MadLavaAgent.sha256("x").length());}}
+
+import com.madlava.config.ConfigurationMetadata;
+import com.madlava.config.ConfigurationResolver;
+import com.madlava.config.RuntimeConfigurationManager;
+import org.junit.jupiter.api.Test;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class MadLavaAgentTest {
+    @Test void legacyNoOpSettingsAreReportedAsUnsupportedWhenNonDefault() {
+        ConfigurationResolver resolver=new ConfigurationResolver(ConfigurationMetadata.baseline());
+        RuntimeConfigurationManager manager=new RuntimeConfigurationManager(resolver, Map.of("security.token","secret"), "test");
+        assertEquals("security.token", MadLavaAgent.unsupportedLegacyConfiguration(manager.current()));
+
+        manager=new RuntimeConfigurationManager(resolver, Map.of("safety.featureSnapshotTimeoutMillis",2000), "test");
+        assertEquals("safety.featureSnapshotTimeoutMillis", MadLavaAgent.unsupportedLegacyConfiguration(manager.current()));
+    }
+
+    @Test void methodRuleHotReloadRequiresRetransformationSupport() {
+        assertTrue(MadLavaAgent.liveMethodRuleReloadSupported(true, true));
+        assertFalse(MadLavaAgent.liveMethodRuleReloadSupported(true, false));
+        assertFalse(MadLavaAgent.liveMethodRuleReloadSupported(false, true));
+    }
+    @Test void startupConfigurationCanonicalizationIsLengthFramed() {
+        Map<String,String> first=new java.util.LinkedHashMap<>(); first.put("a","x\nb=y"); first.put("b","z");
+        Map<String,String> second=new java.util.LinkedHashMap<>(); second.put("a","x"); second.put("b","y\nb=z");
+        assertNotEquals(MadLavaAgent.canonical(first),MadLavaAgent.canonical(second));
+    }
+
+}

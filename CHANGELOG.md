@@ -2,6 +2,7 @@
 
 ## Maintenance
 
+- Fixed checkpoint/scope delta handling for nested method argument groups, interval averages, section-level cumulative diagnostics, and zero-activity rows; hardened metric reset semantics and added focused regression coverage.
 - Refactored agent bootstrap for readability, corrected final-version metadata, strengthened final JAR inspection, generalized checksum generation, and added portable CI coverage.
 - Marked the optional JFR recording stream daemon so it cannot keep an observed JVM alive, and hardened packaged-process test cleanup and diagnostics.
 

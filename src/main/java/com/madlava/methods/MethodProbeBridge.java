@@ -29,7 +29,7 @@ public final class MethodProbeBridge {
             return 0L;
         }
         if (Boolean.TRUE.equals(CALLBACK_ACTIVE.get())) {
-            metrics.suppressedReentrantCallback();
+            try { metrics.suppressedReentrantCallback(); } catch (Throwable ignored) { }
             return 0L;
         }
         CALLBACK_ACTIVE.set(Boolean.TRUE);
@@ -52,10 +52,16 @@ public final class MethodProbeBridge {
         complete(methodId, startedNanos, true);
     }
 
-    public static void traceArguments(int methodId, long durationNanos, Object[] arguments) {
+    public static void traceArguments(int methodId, long startedNanos, Object[] arguments) {
         MethodMetrics metrics = METRICS.get();
-        if (metrics == null || methodId == MethodRegistry.REJECTED_ID) return;
-        try { metrics.traceArguments(methodId, durationNanos, arguments); } catch (Throwable ignored) { }
+        if (metrics == null || methodId == MethodRegistry.REJECTED_ID || startedNanos == 0L || arguments == null) return;
+        if (Boolean.TRUE.equals(CALLBACK_ACTIVE.get())) {
+            try { metrics.suppressedReentrantCallback(); } catch (Throwable ignored) { }
+            return;
+        }
+        CALLBACK_ACTIVE.set(Boolean.TRUE);
+        try { metrics.traceArguments(methodId, startedNanos, arguments); } catch (Throwable ignored) { }
+        finally { CALLBACK_ACTIVE.remove(); }
     }
 
     private static void complete(int methodId, long startedNanos, boolean exceptional) {
@@ -64,7 +70,7 @@ public final class MethodProbeBridge {
             return;
         }
         if (Boolean.TRUE.equals(CALLBACK_ACTIVE.get())) {
-            metrics.suppressedReentrantCallback();
+            try { metrics.suppressedReentrantCallback(); } catch (Throwable ignored) { }
             return;
         }
         CALLBACK_ACTIVE.set(Boolean.TRUE);

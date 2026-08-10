@@ -16,12 +16,11 @@ public final class JsonEncoder {
         for (Map.Entry<String, FeatureState> entry : snapshot.features().entrySet()) {
             if (!first) out.append(','); first = false;
             out.append('"').append(escape(entry.getKey())).append("\":{\"state\":\"").append(entry.getValue()).append("\",\"featureVersion\":1,\"snapshotDurationNanos\":0,\"errorCount\":0,\"accuracy\":{\"level\":\"EXACT\",\"coveragePercent\":100.0,\"limitations\":[]},\"data\":");
-            appendValue(out, snapshot.featureData().getOrDefault(entry.getKey(), Map.of()));
+            out.append(Json.encode(snapshot.featureData().getOrDefault(entry.getKey(), Map.of())));
             out.append('}');
         }
         out.append("},\"selfObservability\":{\"writerQueueCapacityCount\":64,\"droppedSnapshotCount\":").append(snapshot.droppedCount()).append("},\"artifacts\":[]}");
         return out.toString();
     }
     static String escape(String text) { StringBuilder out=new StringBuilder(text.length()+8);for(int i=0;i<text.length();i++){char c=text.charAt(i);switch(c){case '"':out.append("\\\"");break;case '\\':out.append("\\\\");break;case '\n':out.append("\\n");break;case '\r':out.append("\\r");break;case '\t':out.append("\\t");break;default:if(c<0x20)out.append(String.format("\\u%04x",(int)c));else out.append(c);}}return out.toString();}
-    private static void appendValue(StringBuilder out,Object value){if(value==null){out.append("null");return;}if(value instanceof Number||value instanceof Boolean){out.append(value);return;}if(value instanceof Map){out.append('{');boolean first=true;for(Map.Entry<?,?> e:((Map<?,?>)value).entrySet()){if(!first)out.append(',');first=false;out.append('"').append(escape(String.valueOf(e.getKey()))).append("\":");appendValue(out,e.getValue());}out.append('}');return;}out.append('"').append(escape(String.valueOf(value))).append('"');}
 }

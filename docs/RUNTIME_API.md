@@ -30,7 +30,15 @@ The bridge, bounded checkpoint registry, and per-method/per-serialization-group
 delta calculation are implemented. `COUNT_BY_ARGS` groups are returned already
 aggregated, so consumers do not need to reconstruct counts from events. Delta
 responses include configuration-version metadata when a checkpoint spans a
-runtime configuration change.
+runtime configuration change. Nested `COUNT_BY_ARGS` rows are delta-calculated
+with their parent method, and unchanged rows are omitted from interval results.
+
+For duration statistics, additive totals are subtracted and the interval average
+is recomputed from the interval total and completion count. Minimum and maximum
+durations cannot in general be reconstructed from two cumulative snapshots; for
+a row that already existed at the checkpoint they are therefore returned as
+`null` in delta results instead of an incorrect subtraction. Rows first created
+after the checkpoint retain their exact minimum and maximum values.
 
 ## Runtime configuration bridge
 

@@ -40,6 +40,12 @@ public final class SparkSerializationMetrics {
                 target.layer().name(),
                 safeRootClass(rootClass),
                 accuracy.name());
+        // Section-level suppression is independent of whether this root operation fits in the
+        // bounded group table. Otherwise pressure on group cardinality makes suppression itself
+        // disappear from the report.
+        if (nestedSuppressed > 0L) {
+            suppressedNestedOperations.add(nestedSuppressed);
+        }
         Counters counters = countersFor(candidate);
         if (counters == null) {
             return;
@@ -57,7 +63,6 @@ public final class SparkSerializationMetrics {
         }
         if (nestedSuppressed > 0L) {
             counters.nestedOperationsSuppressed.add(nestedSuppressed);
-            suppressedNestedOperations.add(nestedSuppressed);
         }
     }
 
@@ -70,24 +75,31 @@ public final class SparkSerializationMetrics {
         for (Map.Entry<GroupKey, Counters> entry : groups.entrySet()) {
             GroupKey key = entry.getKey();
             Counters values = entry.getValue();
-            long operations = values.operations.sum();
-            long total = values.totalDurationNanos.sum();
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("implementation", key.implementation);
             item.put("operation", key.operation);
             item.put("layer", key.layer);
             item.put("rootClass", key.rootClass);
             item.put("byteAccuracy", key.byteAccuracy);
-            item.put("operations", operations);
-            item.put("successfulOperations", values.successfulOperations.sum());
-            item.put("failedOperations", values.failedOperations.sum());
+            // Outcomes/detail counters are updated after operations. Read them first and the
+            // parent operation count last to avoid transient impossible live snapshots.
+            long successful = values.successfulOperations.sum();
+            long failed = values.failedOperations.sum();
+            long total = values.totalDurationNanos.sum();
+            long operationsWithBytes = values.operationsWithBytes.sum();
+            long observedBytes = values.observedBytes.sum();
+            long nested = values.nestedOperationsSuppressed.sum();
+            long operations = values.operations.sum();
+            item.put("successfulOperations", successful);
+            item.put("failedOperations", failed);
             item.put("totalDurationNanos", total);
             item.put("minimumDurationNanos", operations == 0 ? 0 : values.minimumDurationNanos.get());
             item.put("maximumDurationNanos", operations == 0 ? 0 : values.maximumDurationNanos.get());
             item.put("averageDurationNanos", operations == 0 ? 0 : total / operations);
-            item.put("operationsWithObservedBytes", values.operationsWithBytes.sum());
-            item.put("observedBytes", values.observedBytes.sum());
-            item.put("nestedOperationsSuppressed", values.nestedOperationsSuppressed.sum());
+            item.put("operationsWithObservedBytes", operationsWithBytes);
+            item.put("observedBytes", observedBytes);
+            item.put("nestedOperationsSuppressed", nested);
+            item.put("operations", operations);
             results.add(item);
         }
         results.sort(Comparator
@@ -116,6 +128,9 @@ public final class SparkSerializationMetrics {
 
     public void reset() {
         groups.clear();
+        droppedGroups.reset();
+        suppressedNestedOperations.reset();
+        bridgeFailures.reset();
     }
 
     private Counters countersFor(GroupKey candidate) {

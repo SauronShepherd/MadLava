@@ -26,9 +26,7 @@ public final class MethodMetrics {
     private static final int DEFAULT_MAX_ARGUMENT_GROUPS_PER_METHOD = 256;
     private final int maxArgumentGroupsPerMethod;
     private final LongAdder suppressedReentrantCallbacks = new LongAdder();
-    private volatile Consumer<Map<String,Object>> traceSink;
-    private volatile long traceConfigurationVersion;
-    private volatile TraceSampler traceSampler = new TraceSampler(1.0);
+    private volatile TraceConfiguration traceConfiguration;
     private volatile ArgumentCapture argumentCapture = new ArgumentCapture(new SafeArgumentRenderer(), new ArgumentRedactor(null, null), 16);
     private volatile ArgumentCanonicalizer argumentCanonicalizer = new ArgumentCanonicalizer();
 
@@ -68,9 +66,13 @@ public final class MethodMetrics {
         emitTrace(methodId, durationNanos);
     }
 
-    public void enableTracing(long configurationVersion, Consumer<Map<String,Object>> sink) { traceConfigurationVersion=configurationVersion; traceSink=sink; }
-    public void enableTracing(long configurationVersion, double sampleRate, Consumer<Map<String,Object>> sink) { traceConfigurationVersion=configurationVersion; traceSampler=new TraceSampler(sampleRate); traceSink=sink; }
-    public void disableTracing() { traceSink=null; }
+    public void enableTracing(long configurationVersion, Consumer<Map<String,Object>> sink) {
+        enableTracing(configurationVersion, 1.0, sink);
+    }
+    public void enableTracing(long configurationVersion, double sampleRate, Consumer<Map<String,Object>> sink) {
+        traceConfiguration = sink == null ? null : new TraceConfiguration(configurationVersion, new TraceSampler(sampleRate), sink);
+    }
+    public void disableTracing() { traceConfiguration=null; }
     public void configureArgumentCapture(ArgumentCapture capture) { if(capture!=null) argumentCapture=capture; }
     public void traceArguments(int methodId, long durationNanos, Object[] arguments) {
         MethodKey key=registry.key(methodId);
@@ -80,20 +82,30 @@ public final class MethodMetrics {
             ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.computeIfAbsent(methodId, ignored -> new ConcurrentHashMap<>());
             ArgumentKey keyValue = new ArgumentKey(rendered);
             LongAdder group = groups.get(keyValue);
-            if(group == null && groups.size() >= maxArgumentGroupsPerMethod) {
-                droppedArgumentGroups.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
-                overflowArgumentInvocations.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
-                return;
+            if (group == null) {
+                synchronized (groups) {
+                    group = groups.get(keyValue);
+                    if (group == null) {
+                        if (groups.size() >= maxArgumentGroupsPerMethod) {
+                            droppedArgumentGroups.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
+                            overflowArgumentInvocations.computeIfAbsent(methodId, ignored -> new LongAdder()).increment();
+                            return;
+                        }
+                        group = new LongAdder();
+                        groups.put(keyValue, group);
+                    }
+                }
             }
-            groups.computeIfAbsent(keyValue, ignored -> new LongAdder()).increment();
+            group.increment();
         }
         catch(Throwable ignored) { }
     }
 
     private void emitTrace(int methodId, long durationNanos) {
-        Consumer<Map<String,Object>> sink=traceSink; MethodKey key=registry.key(methodId);
-        if(sink==null||key==null||!traceSampler.sample())return;
-        try { sink.accept(TraceEvent.methodCall(traceConfigurationVersion,key.owner(),key.name(),key.descriptor(),durationNanos,null)); }
+        TraceConfiguration tracing = traceConfiguration;
+        MethodKey key=registry.key(methodId);
+        if(tracing==null||key==null||!tracing.sampler.sample())return;
+        try { tracing.sink.accept(TraceEvent.methodCall(tracing.configurationVersion,key.owner(),key.name(),key.descriptor(),durationNanos,null)); }
         catch(Throwable ignored) { }
     }
 
@@ -110,17 +122,11 @@ public final class MethodMetrics {
             }
             Counters values = entry.getValue();
             Map<String, Object> item = new LinkedHashMap<>(key.report());
-            long completions = values.normalCompletions.sum() + values.exceptionalCompletions.sum();
-            long total = values.totalDurationNanos.sum();
-            item.put("invocations", values.invocations.sum());
-            item.put("normalCompletions", values.normalCompletions.sum());
-            item.put("exceptionalCompletions", values.exceptionalCompletions.sum());
-            item.put("timedCompletions", completions);
-            item.put("totalDurationNanos", total);
-            item.put("minimumDurationNanos", completions == 0 ? 0 : values.minimumDurationNanos.get());
-            item.put("maximumDurationNanos", completions == 0 ? 0 : values.maximumDurationNanos.get());
-            item.put("averageDurationNanos", completions == 0 ? 0 : total / completions);
-            item.put("timingSemantics", "INCLUSIVE_ELAPSED_SYSTEM_NANO_TIME");
+
+            // Read child/detail counters first and the parent invocation total last. An argument
+            // group or completion is recorded only after entered(), so this ordering prevents a
+            // live snapshot from reporting more detailed events than parent invocations merely
+            // because activity advanced between two LongAdder.sum() calls.
             ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.get(entry.getKey());
             if (groups != null && !groups.isEmpty()) {
                 List<Map<String,Object>> argumentReports = new ArrayList<>();
@@ -130,6 +136,19 @@ public final class MethodMetrics {
                 item.put("droppedArgumentGroups", droppedArgumentGroups.getOrDefault(entry.getKey(), new LongAdder()).sum());
                 item.put("overflowArgumentInvocations", overflowArgumentInvocations.getOrDefault(entry.getKey(), new LongAdder()).sum());
             }
+            long normal = values.normalCompletions.sum();
+            long exceptional = values.exceptionalCompletions.sum();
+            long completions = normal + exceptional;
+            long total = values.totalDurationNanos.sum();
+            item.put("normalCompletions", normal);
+            item.put("exceptionalCompletions", exceptional);
+            item.put("timedCompletions", completions);
+            item.put("totalDurationNanos", total);
+            item.put("minimumDurationNanos", completions == 0 ? 0 : values.minimumDurationNanos.get());
+            item.put("maximumDurationNanos", completions == 0 ? 0 : values.maximumDurationNanos.get());
+            item.put("averageDurationNanos", completions == 0 ? 0 : total / completions);
+            item.put("timingSemantics", "INCLUSIVE_ELAPSED_SYSTEM_NANO_TIME");
+            item.put("invocations", values.invocations.sum());
             methods.add(item);
         }
         methods.sort(Comparator
@@ -148,12 +167,28 @@ public final class MethodMetrics {
         report.put("limitations", List.of(
                 "Durations are inclusive; nested method durations overlap.",
                 "Counts describe selected method boundaries, not physical bytes or CPU samples.",
-                "Arguments, return values, payloads and exception messages are never retained."));
+                "Raw arguments, return values, payloads and exception messages are never retained; COUNT_BY_ARGS stores bounded type shapes and per-run salted scalar fingerprints."));
         return report;
     }
 
     public void reset() {
         counters.clear();
+        argumentGroups.clear();
+        droppedArgumentGroups.clear();
+        overflowArgumentInvocations.clear();
+        suppressedReentrantCallbacks.reset();
+        registry.resetDroppedRegistrations();
+    }
+
+    private static final class TraceConfiguration {
+        private final long configurationVersion;
+        private final TraceSampler sampler;
+        private final Consumer<Map<String,Object>> sink;
+        private TraceConfiguration(long configurationVersion, TraceSampler sampler, Consumer<Map<String,Object>> sink) {
+            this.configurationVersion = configurationVersion;
+            this.sampler = sampler;
+            this.sink = sink;
+        }
     }
 
     private static final class Counters {

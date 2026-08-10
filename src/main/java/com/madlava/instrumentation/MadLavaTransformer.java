@@ -6,8 +6,11 @@ import com.madlava.methods.MethodRegistry;
 import com.madlava.methods.MethodObservationPlan;
 import com.madlava.methods.MethodObservationMode;
 import com.madlava.methods.MethodObservationRule;
+import com.madlava.methods.MethodProbeBridge;
+import com.madlava.methods.ClassLoaderScope;
 import com.madlava.serialization.SparkSerializationPlan;
 import com.madlava.serialization.SparkSerializationTarget;
+import com.madlava.serialization.SparkSerializationBridge;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
@@ -16,6 +19,7 @@ import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
@@ -37,11 +41,10 @@ public final class MadLavaTransformer implements ClassFileTransformer {
     private static final String SERIALIZATION_BRIDGE = "com/madlava/serialization/SparkSerializationBridge";
 
     private final boolean methodProfilingEnabled;
-    private volatile MethodFilter methodFilter;
+    private volatile MethodSelection methodSelection;
     private final MethodRegistry methodRegistry;
     private final boolean sparkSerializationEnabled;
     private final SparkSerializationPlan serializationPlan;
-    private volatile MethodObservationPlan observationPlan;
 
     public MadLavaTransformer(
             boolean methodProfilingEnabled,
@@ -55,11 +58,12 @@ public final class MadLavaTransformer implements ClassFileTransformer {
     public MadLavaTransformer(boolean methodProfilingEnabled, MethodFilter methodFilter, MethodRegistry methodRegistry,
             boolean sparkSerializationEnabled, SparkSerializationPlan serializationPlan, MethodObservationPlan observationPlan) {
         this.methodProfilingEnabled = methodProfilingEnabled;
-        this.methodFilter = methodFilter;
+        this.methodSelection = new MethodSelection(
+                methodFilter,
+                observationPlan == null ? MethodObservationPlan.empty() : observationPlan);
         this.methodRegistry = methodRegistry;
         this.sparkSerializationEnabled = sparkSerializationEnabled;
         this.serializationPlan = serializationPlan;
-        this.observationPlan = observationPlan == null ? MethodObservationPlan.empty() : observationPlan;
     }
 
     @Override
@@ -76,7 +80,16 @@ public final class MadLavaTransformer implements ClassFileTransformer {
             return null;
         }
 
+        List<MethodRegistry.Reservation> methodReservations = new ArrayList<>();
+        List<Integer> matchedSerializationTargets = new ArrayList<>();
         try {
+            boolean methodBridgeVisible = !methodProfilingEnabled
+                    || bridgeVisible(loader, METHOD_BRIDGE, MethodProbeBridge.class);
+            boolean serializationBridgeVisible = !sparkSerializationEnabled
+                    || bridgeVisible(loader, SERIALIZATION_BRIDGE, SparkSerializationBridge.class);
+            // One class transformation must use one coherent method-selection generation. Hot
+            // reload may publish a newer generation concurrently, but never halfway through this class.
+            MethodSelection selection = methodSelection;
             if (sparkSerializationEnabled) {
                 serializationPlan.classVisited(className);
             }
@@ -85,18 +98,25 @@ public final class MadLavaTransformer implements ClassFileTransformer {
             reader.accept(classNode, 0);
 
             boolean changed = false;
+            boolean serializationChanged = false;
             String owner = className.replace('/', '.');
-            String loaderScope = loaderScope(loader);
+            String loaderScope = ClassLoaderScope.scope(loader);
             for (MethodNode method : classNode.methods) {
                 if (!eligible(method)) {
                     continue;
                 }
 
-                boolean generic = methodProfilingEnabled && methodFilter.matches(owner, method.name, method.desc);
-                Optional<MethodObservationRule> observation = observationPlan.find(owner, method.name, method.desc);
-                if (!generic) generic = observation.isPresent();
-                boolean traceArgs = observation.isPresent() && observation.get().mode() == MethodObservationMode.COUNT_BY_ARGS;
-                Optional<SparkSerializationTarget> target = sparkSerializationEnabled
+                boolean generic = methodProfilingEnabled && methodBridgeVisible
+                        && selection.filter.matches(owner, method.name, method.desc);
+                Optional<MethodObservationRule> observation = generic
+                        ? selection.plan.find(owner, method.name, method.desc)
+                        : Optional.empty();
+                // Observation rules control how an already-selected method is measured. They must
+                // never override MethodFilter admission, because MethodFilter is where exclusions
+                // are applied and the public contract is explicitly "excludes win".
+                boolean traceArgs = generic && observation.isPresent()
+                        && observation.get().mode() == MethodObservationMode.COUNT_BY_ARGS;
+                Optional<SparkSerializationTarget> target = sparkSerializationEnabled && serializationBridgeVisible
                         ? serializationPlan.find(className, method.name, method.desc)
                         : Optional.empty();
                 if (!generic && target.isEmpty()) {
@@ -105,14 +125,18 @@ public final class MadLavaTransformer implements ClassFileTransformer {
 
                 int methodId = MethodRegistry.REJECTED_ID;
                 if (generic) {
-                    methodId = methodRegistry.register(new MethodKey(loaderScope, owner, method.name, method.desc));
+                    MethodRegistry.Reservation reservation = methodRegistry.reserve(
+                            new MethodKey(loaderScope, owner, method.name, method.desc));
+                    methodId = reservation.id();
                     generic = methodId != MethodRegistry.REJECTED_ID;
+                    if (generic) methodReservations.add(reservation);
                 }
                 if (!generic && target.isEmpty()) {
                     continue;
                 }
                 if (target.isPresent()) {
-                    serializationPlan.targetMatched(target.get().id());
+                    matchedSerializationTargets.add(target.get().id());
+                    serializationChanged = true;
                 }
 
                 instrument(method, methodId, generic, traceArgs, target.orElse(null));
@@ -127,11 +151,13 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS,
                     loader);
             classNode.accept(writer);
-            if (sparkSerializationEnabled && serializationPlan.mayMatchClass(className)) {
-                serializationPlan.classTransformed();
-            }
-            return writer.toByteArray();
+            byte[] transformed = writer.toByteArray();
+            for (MethodRegistry.Reservation reservation : methodReservations) methodRegistry.commit(reservation);
+            for (Integer targetId : matchedSerializationTargets) serializationPlan.targetMatched(targetId);
+            if (serializationChanged) serializationPlan.classTransformed();
+            return transformed;
         } catch (Throwable ignored) {
+            for (MethodRegistry.Reservation reservation : methodReservations) methodRegistry.rollback(reservation);
             if (sparkSerializationEnabled && serializationPlan.mayMatchClass(className)) {
                 serializationPlan.transformationFailed();
             }
@@ -144,12 +170,30 @@ public final class MadLavaTransformer implements ClassFileTransformer {
             return false;
         }
         String owner = internalName.replace('/', '.');
-        return (methodProfilingEnabled && methodFilter.mayMatchClass(owner))
+        MethodSelection selection = methodSelection;
+        return (methodProfilingEnabled && selection.filter.mayMatchClass(owner))
                 || (sparkSerializationEnabled && serializationPlan.mayMatchClass(internalName));
     }
 
-    public void updateMethodFilter(MethodFilter filter) { if (filter != null) this.methodFilter = filter; }
-    public void updateObservationPlan(MethodObservationPlan plan) { if (plan != null) this.observationPlan = plan; }
+    public void updateMethodSelection(MethodFilter filter, MethodObservationPlan plan) {
+        if (filter != null && plan != null) this.methodSelection = new MethodSelection(filter, plan);
+    }
+    public void updateMethodFilter(MethodFilter filter) {
+        if (filter != null) { MethodSelection current = methodSelection; this.methodSelection = new MethodSelection(filter, current.plan); }
+    }
+    public void updateObservationPlan(MethodObservationPlan plan) {
+        if (plan != null) { MethodSelection current = methodSelection; this.methodSelection = new MethodSelection(current.filter, plan); }
+    }
+
+    private static final class MethodSelection {
+        private final MethodFilter filter;
+        private final MethodObservationPlan plan;
+        private MethodSelection(MethodFilter filter, MethodObservationPlan plan) {
+            if (filter == null || plan == null) throw new IllegalArgumentException("method selection");
+            this.filter = filter;
+            this.plan = plan;
+        }
+    }
 
     private static void instrument(
             MethodNode method,
@@ -188,6 +232,28 @@ public final class MadLavaTransformer implements ClassFileTransformer {
         LabelNode handler = new LabelNode();
 
         InsnList entry = new InsnList();
+        LabelNode argumentsStart = null;
+        LabelNode argumentsEnd = null;
+        LabelNode argumentsHandler = null;
+        LabelNode argumentsContinue = null;
+        if (traceArgs) {
+            // Build the optional argument grouping tuple before starting the method timer.
+            // Allocation/boxing is profiler overhead and must not inflate application duration.
+            entry.add(new InsnNode(Opcodes.ACONST_NULL));
+            entry.add(new VarInsnNode(Opcodes.ASTORE, argumentsLocal));
+            argumentsStart = new LabelNode();
+            argumentsEnd = new LabelNode();
+            argumentsHandler = new LabelNode();
+            argumentsContinue = new LabelNode();
+            entry.add(argumentsStart);
+            appendArgumentsArray(entry, method.access, method.desc);
+            entry.add(new VarInsnNode(Opcodes.ASTORE, argumentsLocal));
+            entry.add(argumentsEnd);
+            entry.add(new JumpInsnNode(Opcodes.GOTO, argumentsContinue));
+            entry.add(argumentsHandler);
+            entry.add(new InsnNode(Opcodes.POP));
+            entry.add(argumentsContinue);
+        }
         if (generic) {
             entry.add(new LdcInsnNode(methodId));
             entry.add(new MethodInsnNode(
@@ -197,10 +263,16 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     "(I)J",
                     false));
             entry.add(new VarInsnNode(Opcodes.LSTORE, methodStartedLocal));
-        }
-        if (traceArgs) {
-            appendArgumentsArray(entry, method.access, method.desc);
-            entry.add(new VarInsnNode(Opcodes.ASTORE, argumentsLocal));
+            if (traceArgs) {
+                // COUNT_BY_ARGS represents method invocations, not method completions. Record the
+                // grouping at entry so calls that never return (or cross a checkpoint boundary)
+                // do not leave the parent invocation and its argument group in different logical
+                // intervals. The non-zero entry token still ties grouping to a successful enter().
+                entry.add(new LdcInsnNode(methodId));
+                entry.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
+                entry.add(new VarInsnNode(Opcodes.ALOAD, argumentsLocal));
+                entry.add(new MethodInsnNode(Opcodes.INVOKESTATIC, METHOD_BRIDGE, "traceArguments", "(IJ[Ljava/lang/Object;)V", false));
+            }
         }
         if (serializationTarget != null) {
             entry.add(new LdcInsnNode(serializationTarget.id()));
@@ -233,12 +305,7 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                         false));
             }
             if (generic) {
-                if (traceArgs) {
-                    exit.add(new LdcInsnNode(methodId));
-                    exit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
-                    exit.add(new VarInsnNode(Opcodes.ALOAD, argumentsLocal));
-                    exit.add(new MethodInsnNode(Opcodes.INVOKESTATIC, METHOD_BRIDGE, "traceArguments", "(IJ[Ljava/lang/Object;)V", false));
-                }
+                // Stop timing before COUNT_BY_ARGS canonicalization/aggregation.
                 exit.add(new LdcInsnNode(methodId));
                 exit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
                 exit.add(new MethodInsnNode(
@@ -266,12 +333,7 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                     false));
         }
         if (generic) {
-            if (traceArgs) {
-                exceptionalExit.add(new LdcInsnNode(methodId));
-                exceptionalExit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
-                exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, argumentsLocal));
-                exceptionalExit.add(new MethodInsnNode(Opcodes.INVOKESTATIC, METHOD_BRIDGE, "traceArguments", "(IJ[Ljava/lang/Object;)V", false));
-            }
+            // Stop timing before COUNT_BY_ARGS canonicalization/aggregation.
             exceptionalExit.add(new LdcInsnNode(methodId));
             exceptionalExit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
             exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, throwableLocal));
@@ -285,6 +347,13 @@ public final class MadLavaTransformer implements ClassFileTransformer {
         exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, throwableLocal));
         exceptionalExit.add(new InsnNode(Opcodes.ATHROW));
         method.instructions.add(exceptionalExit);
+        if (traceArgs) {
+            method.tryCatchBlocks.add(new TryCatchBlockNode(
+                    argumentsStart,
+                    argumentsEnd,
+                    argumentsHandler,
+                    "java/lang/Throwable"));
+        }
         method.tryCatchBlocks.add(new TryCatchBlockNode(
                 protectedStart,
                 protectedEnd,
@@ -351,6 +420,14 @@ public final class MadLavaTransformer implements ClassFileTransformer {
         instructions.add(new VarInsnNode(Opcodes.ALOAD, local));
     }
 
+    private static boolean bridgeVisible(ClassLoader loader, String internalName, Class<?> expected) {
+        try {
+            return Class.forName(internalName.replace('/', '.'), false, loader) == expected;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private static boolean eligible(MethodNode method) {
         if ("<init>".equals(method.name) || "<clinit>".equals(method.name)) {
             return false;
@@ -374,12 +451,4 @@ public final class MadLavaTransformer implements ClassFileTransformer {
                 || "module-info".equals(className);
     }
 
-    private static String loaderScope(ClassLoader loader) {
-        if (loader == null) {
-            return "bootstrap";
-        }
-        return loader.getClass().getName()
-                + '@'
-                + Integer.toHexString(System.identityHashCode(loader));
-    }
 }

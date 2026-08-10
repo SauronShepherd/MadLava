@@ -60,10 +60,10 @@ public final class SparkSerializationBridge {
                     : target.rootMode() == SparkSerializationTarget.RootMode.NOT_APPLICABLE
                     ? "not-applicable"
                     : "pending-return-value";
-            state.frame = new Frame(target, System.nanoTime(), inputBytes, rootClass);
+            state.frame = new Frame(configuration, target, System.nanoTime(), inputBytes, rootClass);
             return ROOT_TOKEN;
         } catch (Throwable ignored) {
-            configuration.metrics.bridgeFailure();
+            safeBridgeFailure(configuration);
             safeReset();
             return DISABLED_TOKEN;
         } finally {
@@ -82,11 +82,9 @@ public final class SparkSerializationBridge {
     }
 
     private static void complete(Object returnedValue, long token, boolean success) {
-        Configuration configuration = CONFIGURATION.get();
-        if (configuration == null || token == DISABLED_TOKEN || Boolean.TRUE.equals(CALLBACK_ACTIVE.get())) {
-            return;
-        }
+        if (token == DISABLED_TOKEN || Boolean.TRUE.equals(CALLBACK_ACTIVE.get())) return;
         CALLBACK_ACTIVE.set(Boolean.TRUE);
+        Configuration configuration = null;
         try {
             State state = STATE.get();
             if (state.depth <= 0) {
@@ -106,6 +104,11 @@ public final class SparkSerializationBridge {
             }
 
             Frame frame = state.frame;
+            configuration = frame.configuration;
+            if (configuration == null) {
+                safeReset();
+                return;
+            }
             long duration = Math.max(0L, System.nanoTime() - frame.startedNanos);
             String rootClass = frame.rootClass;
             if (frame.target.rootMode() == SparkSerializationTarget.RootMode.RETURN_VALUE && success) {
@@ -136,7 +139,7 @@ public final class SparkSerializationBridge {
                     frame.nestedSuppressed);
             safeReset();
         } catch (Throwable ignored) {
-            configuration.metrics.bridgeFailure();
+            safeBridgeFailure(configuration);
             safeReset();
         } finally {
             CALLBACK_ACTIVE.remove();
@@ -169,6 +172,11 @@ public final class SparkSerializationBridge {
         }
     }
 
+    private static void safeBridgeFailure(Configuration configuration) {
+        try { if (configuration != null) configuration.metrics.bridgeFailure(); }
+        catch (Throwable ignored) { /* bridge diagnostics are fail-open too */ }
+    }
+
     private static void safeReset() {
         try {
             STATE.remove();
@@ -198,6 +206,7 @@ public final class SparkSerializationBridge {
     }
 
     private static final class Frame {
+        private final Configuration configuration;
         private final SparkSerializationTarget target;
         private final long startedNanos;
         private final long inputBytes;
@@ -205,10 +214,12 @@ public final class SparkSerializationBridge {
         private long nestedSuppressed;
 
         private Frame(
+                Configuration configuration,
                 SparkSerializationTarget target,
                 long startedNanos,
                 long inputBytes,
                 String rootClass) {
+            this.configuration = configuration;
             this.target = target;
             this.startedNanos = startedNanos;
             this.inputBytes = inputBytes;

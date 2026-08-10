@@ -16,6 +16,7 @@ import com.madlava.config.ConfigurationResolver;
 import com.madlava.config.ConfigurationWatcher;
 import com.madlava.config.RuntimeConfigurationManager;
 import com.madlava.methods.MethodObservationPlan;
+import com.madlava.methods.MethodRuleList;
 import com.madlava.api.MadLavaRuntimeRegistry;
 
 import java.lang.instrument.Instrumentation;
@@ -56,15 +57,25 @@ public final class MadLavaAgent {
         JsonlReporter reporter = null;
         ConfigurationWatcher configurationWatcher = null;
         RuntimeConfigurationManager runtimeConfiguration = null;
+        AgentRuntime runtime = null;
         boolean methodBridgeConfigured = false;
         boolean serializationBridgeConfigured = false;
         try {
             AgentOptions options = AgentOptions.parse(rawArguments);
             runtimeConfiguration = new RuntimeConfigurationManager(
                     new ConfigurationResolver(ConfigurationMetadata.baseline()),
-                    java.util.Collections.emptyMap(), options.configurationSourcePath());
+                    java.util.Collections.emptyMap(), options.configurationSourcePath(), options.runtimeConfigurationOverrides());
             if (!options.configurationSourcePath().isBlank()) {
-                runtimeConfiguration.reloadJson(java.nio.file.Paths.get(options.configurationSourcePath()), java.util.Collections.emptyMap());
+                RuntimeConfigurationManager.UpdateResult initialReload = runtimeConfiguration.reloadJson(
+                        java.nio.file.Paths.get(options.configurationSourcePath()), java.util.Collections.emptyMap());
+                if (!initialReload.applied()) {
+                    throw new IllegalArgumentException(
+                            "Invalid MadLava runtime configuration: " + initialReload.reason());
+                }
+            }
+            String unsupportedStartupKey = unsupportedLegacyConfiguration(runtimeConfiguration.current());
+            if (unsupportedStartupKey != null) {
+                throw new IllegalArgumentException("Unsupported MadLava configuration property: " + unsupportedStartupKey);
             }
             String version = MadLavaAgent.class.getPackage().getImplementationVersion();
             if (version == null || version.isBlank()) {
@@ -74,7 +85,8 @@ public final class MadLavaAgent {
             MethodFilter methodFilter = MethodFilter.parse(
                     options.methodIncludes(),
                     options.methodExcludes());
-            MethodRegistry methodRegistry = options.methodProfilingEnabled()
+            boolean methodCallbacksEnabled = options.methodProfilingEnabled() || options.methodTracingEnabled();
+            MethodRegistry methodRegistry = methodCallbacksEnabled
                     ? new MethodRegistry(options.methodMaxEntries())
                     : null;
             MethodMetrics methodMetrics = methodRegistry == null
@@ -101,25 +113,72 @@ public final class MadLavaAgent {
 
             if (options.methodProfilingEnabled() || options.methodTracingEnabled() || options.sparkSerializationEnabled()) {
                 transformer = new MadLavaTransformer(
-                        options.methodProfilingEnabled(),
+                        methodCallbacksEnabled,
                         methodFilter,
                         methodRegistry == null ? new MethodRegistry(1) : methodRegistry,
                         options.sparkSerializationEnabled(),
                         serializationPlan == null
                                 ? new SparkSerializationPlan(options.sparkSerializationProfile())
                                 : serializationPlan,
-                        MethodObservationPlan.compile(java.util.Arrays.asList(options.methodIncludes().split(";"))));
-                instrumentation.addTransformer(transformer, true);
+                        MethodObservationPlan.compile(MethodRuleList.split(options.methodIncludes())));
+                instrumentation.addTransformer(
+                        transformer,
+                        instrumentation.isRetransformClassesSupported());
             }
 
-            AgentRuntime runtime = new AgentRuntime(
+            final boolean liveMethodRules = liveMethodRuleReloadSupported(methodCallbacksEnabled, instrumentation.isRetransformClassesSupported());
+            final boolean liveTracing = methodMetrics != null;
+            runtimeConfiguration.addTransitionValidator((previous, proposed) -> {
+                String unsupportedKey = unsupportedLegacyConfiguration(proposed);
+                if (unsupportedKey != null) return "UNSUPPORTED_CONFIGURATION: " + unsupportedKey;
+                if (liveMethodRules && (!java.util.Objects.equals(
+                        previous.values().get("filters.methods.includes"), proposed.values().get("filters.methods.includes"))
+                        || !java.util.Objects.equals(
+                        previous.values().get("filters.methods.excludes"), proposed.values().get("filters.methods.excludes")))) {
+                    try {
+                        String includes = String.valueOf(proposed.values().get("filters.methods.includes"));
+                        String excludes = String.valueOf(proposed.values().get("filters.methods.excludes"));
+                        MethodFilter.parse(includes, excludes);
+                        MethodObservationPlan.compile(MethodRuleList.split(includes));
+                    } catch (RuntimeException invalidRule) {
+                        return "INVALID_METHOD_FILTER";
+                    }
+                }
+                java.util.Set<String> liveKeys = new java.util.HashSet<>();
+                liveKeys.add("output.directory");
+                liveKeys.add("reporting.human.maxRows");
+                liveKeys.add("reporting.human.truncate");
+                for (String section : new String[]{"methodProfiling", "argumentGroups", "sparkSerialization", "sparkSerializationDetail", "diagnostics"})
+                    liveKeys.add("reporting.human.sections." + section + ".maxRows");
+                if (liveMethodRules) {
+                    liveKeys.add("filters.methods.includes");
+                    liveKeys.add("filters.methods.excludes");
+                }
+                if (liveTracing) {
+                    liveKeys.add("features.methodTracing.enabled");
+                    liveKeys.add("features.methodTracing.sampleRate");
+                }
+                for (String feature : new String[]{"heapUsage", "nonHeapUsage", "bufferPools", "garbageCollection",
+                        "threadStatistics", "threadCpu", "processResources", "classLoaderInsights",
+                        "jvmExecutionEngine", "selfObservability"}) {
+                    liveKeys.add("features." + feature + ".enabled");
+                }
+                for (String key : proposed.values().keySet()) {
+                    if (java.util.Objects.equals(previous.values().get(key), proposed.values().get(key))) continue;
+                    if (!liveKeys.contains(key)) return "RESTART_REQUIRED: " + key;
+                }
+                return null;
+            });
+
+            runtime = new AgentRuntime(
                     version,
                     sha256(canonical(options.effectiveMap())),
                     options,
                     methodMetrics,
                     serializationMetrics,
                     serializationPlan,
-                    runtimeConfiguration);
+                    runtimeConfiguration,
+                    instrumentation.isRetransformClassesSupported());
             if (!MadLavaRuntimeRegistry.register(runtime)) {
                 throw new IllegalStateException("MadLava runtime already registered");
             }
@@ -146,11 +205,22 @@ public final class MadLavaAgent {
                     }
                     Object includes = current.values().get("filters.methods.includes");
                     Object excludes = current.values().get("filters.methods.excludes");
-                    if (includes != null || excludes != null) {
-                        liveTransformer.updateMethodFilter(MethodFilter.parse(String.valueOf(includes), String.valueOf(excludes)));
-                        liveTransformer.updateObservationPlan(MethodObservationPlan.compile(
-                                java.util.Arrays.asList(String.valueOf(includes).split(";"))));
-                        retransformAlreadyLoaded(instrumentation, liveTransformer);
+                    Object previousIncludes = previous.values().get("filters.methods.includes");
+                    Object previousExcludes = previous.values().get("filters.methods.excludes");
+                    if (!java.util.Objects.equals(includes, previousIncludes)
+                            || !java.util.Objects.equals(excludes, previousExcludes)) {
+                        MethodFilter previousFilter = MethodFilter.parse(
+                                String.valueOf(previousIncludes), String.valueOf(previousExcludes));
+                        MethodFilter nextFilter = MethodFilter.parse(String.valueOf(includes), String.valueOf(excludes));
+                        liveTransformer.updateMethodSelection(
+                                nextFilter,
+                                MethodObservationPlan.compile(MethodRuleList.split(String.valueOf(includes))));
+                        int failures = retransformAlreadyLoaded(instrumentation, liveTransformer, previousFilter);
+                        if (failures > 0) {
+                            throw new IllegalStateException(
+                                    "MadLava method-filter reload left " + failures
+                                            + " loaded class(es) untransformed");
+                        }
                     }
                 });
             }
@@ -169,10 +239,11 @@ public final class MadLavaAgent {
             ConfigurationWatcher activeWatcher = configurationWatcher;
             JsonlReporter activeReporter = reporter;
             RuntimeConfigurationManager activeConfiguration = runtimeConfiguration;
+            AgentRuntime activeRuntime = runtime;
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (activeWatcher != null) activeWatcher.close();
                 activeReporter.close();
-                MadLavaRuntimeRegistry.clear(runtime);
+                MadLavaRuntimeRegistry.clear(activeRuntime);
                 MadLavaRuntimeRegistry.clearConfiguration(activeConfiguration);
             }, "madlava-shutdown"));
             if (options.diagnosticsToStderr()) {
@@ -182,6 +253,9 @@ public final class MadLavaAgent {
                                 + reporter.reportPath().toAbsolutePath().normalize());
             }
         } catch (Throwable failure) {
+            if (configurationWatcher != null) {
+                try { configurationWatcher.close(); } catch (Throwable ignored) { }
+            }
             if (reporter != null) {
                 try { reporter.close(); } catch (Throwable ignored) { }
             }
@@ -194,6 +268,12 @@ public final class MadLavaAgent {
             if (serializationBridgeConfigured) {
                 try { SparkSerializationBridge.clear(); } catch (Throwable ignored) { }
             }
+            if (runtime != null) {
+                try { MadLavaRuntimeRegistry.clear(runtime); } catch (Throwable ignored) { }
+            }
+            if (runtimeConfiguration != null) {
+                try { MadLavaRuntimeRegistry.clearConfiguration(runtimeConfiguration); } catch (Throwable ignored) { }
+            }
             STARTED.set(false);
             System.err.println(
                     "MadLava Iteration-12 bootstrap disabled: "
@@ -201,33 +281,77 @@ public final class MadLavaAgent {
         }
     }
 
-    private static String canonical(Map<String, String> values) {
+    static String canonical(Map<String, String> values) {
         StringBuilder output = new StringBuilder();
         for (Map.Entry<String, String> entry : new TreeMap<>(values).entrySet()) {
-            output.append(entry.getKey()).append('=').append(entry.getValue()).append('\n');
+            String key = entry.getKey();
+            String value = entry.getValue() == null ? "" : entry.getValue();
+            // Length framing makes the representation injective even when values contain '=',
+            // newlines, or text that resembles a following configuration key.
+            output.append(key.length()).append(':').append(key)
+                    .append(value.length()).append(':').append(value);
         }
         return output.toString();
     }
 
-    private static void retransformAlreadyLoaded(
+    private static int retransformAlreadyLoaded(
             Instrumentation instrumentation,
             MadLavaTransformer transformer) {
+        return retransformAlreadyLoaded(instrumentation, transformer, null);
+    }
+
+    /**
+     * Retransforms classes covered by either the current transformer rules or the previous
+     * method filter. The previous filter is required when rules are narrowed/removed: a class
+     * that only matched the old filter must still be retransformed once so its old probes are
+     * removed from the JVM's retransformed definition.
+     */
+    private static int retransformAlreadyLoaded(
+            Instrumentation instrumentation,
+            MadLavaTransformer transformer,
+            MethodFilter previousMethodFilter) {
         if (!instrumentation.isRetransformClassesSupported()) {
-            return;
+            return 0;
         }
+        int failures = 0;
         for (Class<?> candidate : instrumentation.getAllLoadedClasses()) {
             try {
                 if (candidate == null || !instrumentation.isModifiableClass(candidate)) {
                     continue;
                 }
                 String internalName = candidate.getName().replace('.', '/');
-                if (transformer.mayTransformClass(internalName)) {
+                String owner = candidate.getName();
+                boolean matchedPreviously = previousMethodFilter != null
+                        && previousMethodFilter.mayMatchClass(owner);
+                if (matchedPreviously || transformer.mayTransformClass(internalName)) {
                     instrumentation.retransformClasses(candidate);
                 }
             } catch (Throwable ignored) {
-                // A single class must never disable the agent or the application.
+                // A single class must never disable the agent or the application, but reload
+                // callers need to know that the JVM is now only partially retransformed.
+                failures++;
             }
         }
+        return failures;
+    }
+
+    static boolean liveMethodRuleReloadSupported(boolean methodCallbacksEnabled, boolean retransformationSupported) {
+        return methodCallbacksEnabled && retransformationSupported;
+    }
+
+    /** Legacy metadata retained for schema/history compatibility but not implemented by the active agent path. */
+    static String unsupportedLegacyConfiguration(RuntimeConfigurationManager.ConfigurationState state) {
+        if (state == null) return null;
+        ConfigurationMetadata metadata = ConfigurationMetadata.baseline();
+        for (String key : java.util.List.of(
+                "enabled", "reporting.output", "reporting.enabled", "reporting.intervalMillis",
+                "configuration.strict", "configuration.reload.enabled", "configuration.reload.intervalSeconds",
+                "reporting.human.enabled", "security.token", "safety.maxFeatureErrors",
+                "safety.featureSnapshotTimeoutMillis", "safety.globalSnapshotTimeoutMillis")) {
+            ConfigurationMetadata.Entry entry = metadata.entries().get(key);
+            if (entry != null && !java.util.Objects.equals(state.values().get(key), entry.defaultValue())) return key;
+        }
+        return null;
     }
 
     public static String sha256(String value) throws Exception {

@@ -57,4 +57,44 @@ final class AgentOptionsTest {
         Files.writeString(configuration, "{\"reporting\":{\"human\":{\"maxRows\":-1}}}");
         assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse("config="+configuration));
     }
+    @Test
+    void jsonIntegerSettingsRejectFractionalNumbersInsteadOfTruncating() throws Exception {
+        Path positive = directory.resolve("fractional-positive.json");
+        Files.writeString(positive, "{\"features\":{\"methodProfiling\":{\"maxEntries\":1.9}}}");
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse("config="+positive));
+
+        Path nonNegative = directory.resolve("fractional-nonnegative.json");
+        Files.writeString(nonNegative, "{\"reporting\":{\"human\":{\"maxRows\":2.5}}}");
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse("config="+nonNegative));
+    }
+
+    @Test
+    void jsonMethodFilterArraysRequireStrings() throws Exception {
+        Path configuration = directory.resolve("invalid-filter.json");
+        Files.writeString(configuration, "{\"filters\":{\"methods\":{\"includes\":[123]}}}");
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse("config="+configuration));
+    }
+
+    @Test
+    void jsonConfigurationRejectsUnknownPropertiesAtStartup() throws Exception {
+        Path configuration = directory.resolve("unknown-property.json");
+        Files.writeString(configuration,
+                "{\"features\":{\"methodProfiling\":{\"enabld\":true}}}");
+        assertThrows(IllegalArgumentException.class, () -> AgentOptions.parse("config=" + configuration));
+    }
+
+    @Test
+    void compactArgumentsSupportQuotedCommasAndRejectDuplicates() {
+        AgentOptions options=AgentOptions.parse("output=\""+directory.resolve("with,comma")+"\",methodProfiling");
+        assertEquals(directory.resolve("with,comma").toAbsolutePath().normalize(),options.outputDirectory());
+        assertTrue(options.methodProfilingEnabled());
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("methodProfiling=true,methodProfiling=false"));
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("output=\"unterminated"));
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("methodProfiling=treu"));
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("methodTracingSampleRate=2"));
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("sparkSerializationProfile=TYPO"));
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("methodProfilng=true"));
+        assertThrows(IllegalArgumentException.class,()->AgentOptions.parse("reportMaxRows.typo=5"));
+    }
+
 }

@@ -13,8 +13,8 @@ public enum SparkSerializationProfile {
         }
         try {
             return valueOf(value.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException ignored) {
-            return ALL;
+        } catch (IllegalArgumentException failure) {
+            throw new IllegalArgumentException("Unknown Spark serialization profile: " + value, failure);
         }
     }
 

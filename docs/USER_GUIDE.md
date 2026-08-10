@@ -32,7 +32,7 @@ Reports distinguish Java/Kryo implementations, normal/failed operations, nested 
 
 ### Privacy and safety
 
-- Arguments, return values, serializer payloads, exception messages, and private literals are not retained.
+- Raw arguments, return values, serializer payloads, exception messages, and private literals are not retained. `COUNT_BY_ARGS` uses bounded type shapes plus per-run salted scalar fingerprints for equality grouping.
 - Method and serializer cardinality is bounded.
 - Callback failures are swallowed so the profiled application remains authoritative.
 - Each JVM gets a unique run directory, preventing concurrent report mixing.

@@ -14,6 +14,7 @@ public final class FeatureRegistry {
 
     public synchronized void transition(String id, FeatureState state) {
         if (!states.containsKey(id)) throw new IllegalArgumentException("Unknown feature: " + id);
+        if (state == null) throw new IllegalArgumentException("Feature state is required");
         states.put(id, state);
     }
 

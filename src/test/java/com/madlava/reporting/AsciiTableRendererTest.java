@@ -17,4 +17,11 @@ class AsciiTableRendererTest {
         String table=AsciiTableRenderer.render(List.of("NAME"),List.of(List.of("a"),List.of("b")),0,100);
         assertTrue(table.contains("a")); assertTrue(table.contains("b")); assertFalse(table.contains("omitted"));
     }
+    @Test void tinyTruncationLimitsAreActuallyRespected() {
+        String one=AsciiTableRenderer.render(List.of("V"),List.of(List.of("abcdef")),0,1);
+        String two=AsciiTableRenderer.render(List.of("V"),List.of(List.of("abcdef")),0,2);
+        assertTrue(one.contains("| a |"));assertFalse(one.contains("..."));
+        assertTrue(two.contains("| ab |"));assertFalse(two.contains("..."));
+    }
+
 }
