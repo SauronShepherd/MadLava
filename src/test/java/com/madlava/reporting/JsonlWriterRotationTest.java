@@ -25,12 +25,17 @@ class JsonlWriterRotationTest {
         try(java.util.stream.Stream<Path> files=Files.list(root.resolve("segments"))){assertTrue(files.anyMatch(Files::isRegularFile));}
         String manifest=Files.readString(root.resolve("madlava-report-manifest.json"));
         assertTrue(manifest.contains("\"state\":\"FINAL\""));assertTrue(manifest.contains("\"records\":30"));
+        assertTrue(manifest.contains("\"files\":["));
+        assertTrue(manifest.contains("\"path\":\"segments/segment-"));
+        assertTrue(manifest.contains("\"path\":\"madlava.jsonl\""));
+        assertTrue(manifest.matches("(?s).*\\\"sha256\\\":\\\"[0-9a-f]{64}\\\".*"));
     }
 
     @Test void finalManifestEscapesControlCharactersInReportPath() {
         String manifest=JsonlWriter.finalManifestText("line\nbreak/madlava.jsonl",1,1,12,"abc");
         assertTrue(manifest.contains("line\\nbreak"));
         assertFalse(manifest.contains("line\nbreak"));
+        assertTrue(manifest.contains("\"files\":[]"));
         assertEquals(1,manifest.lines().count());
     }
 
@@ -53,7 +58,7 @@ class JsonlWriterRotationTest {
         Thread.sleep(60);
 
         Path unusable = root.resolve("b").resolve("madlava.jsonl");
-        Files.createDirectories(unusable); // A directory cannot be opened as the JSONL file.
+        Files.createDirectories(unusable);
         assertThrows(java.io.IOException.class, () -> writer.rotate(unusable));
 
         queue.submit("{\"record\":\"after\"}");
@@ -63,5 +68,4 @@ class JsonlWriterRotationTest {
         assertTrue(text.contains("before"));
         assertTrue(text.contains("after"));
     }
-
 }
