@@ -30,6 +30,7 @@ class AgentRuntimeTest {
 
     @Test void shutdownSnapshotCarriesExplicitFinalMarker() {
         AgentRuntime runtime=new AgentRuntime("test","hash",AgentOptions.parse(""),null,null,null);
+        assertEquals("snapshot", runtime.snapshot("periodic").get("recordType"));
         assertEquals(false,runtime.snapshot("periodic").get("final"));
         assertEquals(true,runtime.snapshot("shutdown").get("final"));
     }
