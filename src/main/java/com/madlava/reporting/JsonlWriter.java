@@ -76,7 +76,6 @@ public final class JsonlWriter implements AutoCloseable {
         Files.createDirectories(normalized.resolveSibling("segments"));
         try (BufferedWriter probe = Files.newBufferedWriter(normalized, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
-            // Opening and flushing is the preflight. The background writer owns subsequent I/O.
             probe.flush();
         }
     }
@@ -119,8 +118,6 @@ public final class JsonlWriter implements AutoCloseable {
             System.err.println("MadLava writer disabled: " + error.getClass().getSimpleName());
         } finally {
             running.set(false);
-            // If close() timed out while the sink was blocked, the daemon may finish later.
-            // Finalize integrity metadata from the writer thread only after all writes have stopped.
             if (closeRequested) finalizeManifest();
         }
     }
@@ -140,24 +137,19 @@ public final class JsonlWriter implements AutoCloseable {
             finalizeManifest();
             thread = null;
         }
-        // If still alive, retain the thread reference. The reporter must retain the run lock too;
-        // releasing ownership while this daemon can still write would violate single-writer safety.
     }
 
     public synchronized void rotate(Path nextPath) throws IOException {
         if (nextPath == null) throw new IllegalArgumentException("nextPath");
-        // Prove the new destination is writable before stopping the currently healthy writer.
         prepareDestination(nextPath);
         if (thread == null && !running.get()) {
-            // Reporter configuration may be bound before reporter.start(). Relocating an
-            // unstarted writer must not implicitly start background I/O.
             path = nextPath;
             closeRequested = false;
             drainOnStop = true;
             return;
         }
         closeRequested = false;
-        drainOnStop = false; // leave pending records in the queue for the new destination
+        drainOnStop = false;
         running.set(false);
         Thread worker = thread;
         if (worker != null) {
@@ -171,7 +163,6 @@ public final class JsonlWriter implements AutoCloseable {
         startPrepared();
     }
 
-    /** True while the background writer can still touch the active report path. */
     public synchronized boolean isWorkerAlive() {
         return thread != null && thread.isAlive();
     }
@@ -181,23 +172,32 @@ public final class JsonlWriter implements AutoCloseable {
             List<Path> files = reportFiles(path);
             if (files.isEmpty()) return;
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            List<java.util.Map<String,Object>> fileEntries = new ArrayList<>();
+            Path root = path.toAbsolutePath().normalize().getParent();
             long bytes = 0L;
             long records = 0L;
             byte[] buffer = new byte[64 * 1024];
             for (Path file : files) {
-                bytes += Files.size(file);
+                long fileBytes = Files.size(file);
+                bytes += fileBytes;
+                MessageDigest fileDigest = MessageDigest.getInstance("SHA-256");
                 try (InputStream in = new BufferedInputStream(Files.newInputStream(file))) {
                     int read;
                     while ((read = in.read(buffer)) >= 0) {
                         if (read == 0) continue;
                         digest.update(buffer, 0, read);
+                        fileDigest.update(buffer, 0, read);
                         for (int i = 0; i < read; i++) if (buffer[i] == '\n') records++;
                     }
                 }
+                java.util.Map<String,Object> entry = new java.util.LinkedHashMap<>();
+                entry.put("path", root.relativize(file.toAbsolutePath().normalize()).toString().replace('\\', '/'));
+                entry.put("bytes", fileBytes);
+                entry.put("sha256", hex(fileDigest.digest()));
+                fileEntries.add(entry);
             }
-            StringBuilder hex = new StringBuilder();
-            for (byte value : digest.digest()) hex.append(String.format("%02x", value));
-            String manifest = finalManifestText(path.toString(), files.size(), records, bytes, hex.toString());
+            String manifest = finalManifestText(path.toString(), files.size(), records, bytes,
+                    hex(digest.digest()), fileEntries);
             Files.writeString(path.resolveSibling("madlava-report-manifest.json"), manifest,
                     StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         } catch (Throwable ignored) {
@@ -205,7 +205,18 @@ public final class JsonlWriter implements AutoCloseable {
         }
     }
 
+    private static String hex(byte[] digest) {
+        StringBuilder value = new StringBuilder();
+        for (byte item : digest) value.append(String.format("%02x", item));
+        return value.toString();
+    }
+
     static String finalManifestText(String reportPath, int segments, long records, long bytes, String sha256) {
+        return finalManifestText(reportPath, segments, records, bytes, sha256, List.of());
+    }
+
+    static String finalManifestText(String reportPath, int segments, long records, long bytes, String sha256,
+            List<java.util.Map<String,Object>> files) {
         java.util.Map<String,Object> manifestData = new java.util.LinkedHashMap<>();
         manifestData.put("state", "FINAL");
         manifestData.put("path", reportPath);
@@ -213,6 +224,7 @@ public final class JsonlWriter implements AutoCloseable {
         manifestData.put("records", records);
         manifestData.put("bytes", bytes);
         manifestData.put("sha256", sha256);
+        manifestData.put("files", files);
         return Json.encode(manifestData) + "\n";
     }
 
@@ -251,5 +263,4 @@ public final class JsonlWriter implements AutoCloseable {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
-
 }
