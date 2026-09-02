@@ -68,13 +68,12 @@ public final class AgentRuntime {
     public Map<String, Object> snapshot(String reason) {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("schemaVersion", 1);
+        root.put("recordType", "snapshot");
         root.put("timestamp", Instant.now().toString());
         root.put("reason", reason);
         root.put("final", "shutdown".equals(reason));
         root.put("agentVersion", version);
         root.put("startupConfigurationHash", configurationHash);
-        // Pin one immutable state for the entire snapshot. A concurrent reload must never make
-        // the envelope advertise version N while effectiveConfiguration comes from version N+1.
         RuntimeConfigurationManager.ConfigurationState configurationState = runtimeConfiguration == null
                 ? null : runtimeConfiguration.current();
         Map<String, Object> live = configurationState == null
