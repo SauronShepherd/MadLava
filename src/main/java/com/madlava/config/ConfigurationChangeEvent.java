@@ -21,6 +21,7 @@ public final class ConfigurationChangeEvent {
     }
     private static Map<String, Object> base(String type, long version) {
         Map<String, Object> event = new LinkedHashMap<>();
+        event.put("recordType", "configuration-change");
         event.put("type", type); event.put("timestamp", Instant.now().toString()); event.put("configurationVersion", version);
         return event;
     }
