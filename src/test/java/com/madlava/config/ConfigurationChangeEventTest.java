@@ -10,8 +10,16 @@ class ConfigurationChangeEventTest {
         RuntimeConfigurationManager.ConfigurationState before = manager.current();
         RuntimeConfigurationManager.ConfigurationState after = manager.reload(Map.of("enabled", false), Map.of(), "test").state();
         Map<String,Object> event = ConfigurationChangeEvent.accepted(before, after);
+        assertEquals("configuration-change", event.get("recordType"));
         assertEquals("configuration-change", event.get("type"));
         assertEquals(before.version(), event.get("previousConfigurationVersion"));
         assertTrue(((Map<?,?>) event.get("changes")).containsKey("enabled"));
+    }
+
+    @Test void rejectedEventUsesTheSameStableRecordType() {
+        RuntimeConfigurationManager manager = new RuntimeConfigurationManager(new ConfigurationResolver(ConfigurationMetadata.baseline()), Map.of(), "test");
+        Map<String,Object> event = ConfigurationChangeEvent.rejected(manager.current(), "INVALID_CONFIGURATION");
+        assertEquals("configuration-change", event.get("recordType"));
+        assertEquals("configuration-change-rejected", event.get("type"));
     }
 }
