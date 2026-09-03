@@ -1,23 +1,39 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://madlava.dev/schema/madlava-report-v1.schema.json",
-  "title": "MadLava report v1",
+  "title": "MadLava snapshot report v1",
   "type": "object",
   "required": ["schemaVersion", "timestamp", "agentVersion", "configurationHash", "pid", "features", "configuration"],
   "properties": {
     "schemaVersion": {"const": 1},
+    "recordType": {"const": "snapshot"},
     "timestamp": {"type": "string", "format": "date-time"},
+    "reason": {"type": "string"},
+    "final": {"type": "boolean"},
     "agentVersion": {"type": "string", "minLength": 1},
+    "startupConfigurationHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "configurationHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "configurationVersion": {"type": "integer", "minimum": 0},
+    "runtimeConfigurationHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "configurationRuntime": {
+      "type": "object",
+      "properties": {
+        "version": {"type": "integer", "minimum": 0},
+        "successfulReloads": {"type": "integer", "minimum": 0},
+        "failedReloads": {"type": "integer", "minimum": 0},
+        "listenerFailures": {"type": "integer", "minimum": 0},
+        "lastReloadEpochMillis": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
     "pid": {"type": "string", "minLength": 1},
     "uptimeMillis": {"type": "integer", "minimum": 0},
-    "reason": {"type": "string"},
     "configuration": {
       "type": "object",
       "required": ["source", "hashAlgorithm"],
       "properties": {
         "source": {"type": "string"},
-        "sourcePath": {"type": "string"},
+        "sourcePath": {"type": ["string", "null"]},
         "hashAlgorithm": {"const": "SHA-256"}
       },
       "additionalProperties": false
@@ -26,7 +42,9 @@
     "capabilities": {"type": "object"},
     "sparkRuntime": {"type": "object"},
     "cumulative": {"type": "object"},
-    "integrity": {"type": "object"}
+    "effectiveConfiguration": {"type": "object"},
+    "integrity": {"type": "object"},
+    "sequence": {"type": "integer", "minimum": 0}
   },
   "additionalProperties": false
 }
