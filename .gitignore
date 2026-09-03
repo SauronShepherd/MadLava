@@ -1,6 +1,7 @@
 .idea/
 target/
 .tmp/
+.tmp-*/
 madlava-output/
 *.log
 ~$*
