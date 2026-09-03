@@ -1,0 +1,45 @@
+name: Apply viewer quality warnings
+
+on:
+  push:
+    branches:
+      - autopilot-viewer-quality-warnings-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  patch-viewer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch viewer and verification contract
+        shell: pwsh
+        run: |
+          $path='report-viewer/viewer.js'
+          $text=Get-Content -Raw $path
+          $start=$text.IndexOf('function renderDiagnostics(value){')
+          $end=$text.IndexOf("`nfunction summary(value)",$start)
+          if($start -lt 0 -or $end -lt 0){throw 'renderDiagnostics markers not found'}
+          $replacement=@'
+          function reportQualityWarnings(value){const snapshot=value.snapshot||{},dropped=Number(snapshot.droppedSnapshots??value.droppedSnapshots??value.raw&&value.raw.droppedSnapshots??0),warningLevels=new Set(["APPROXIMATE","PARTIAL","DEGRADED","UNAVAILABLE","UNKNOWN"]),accuracyWarnings=Object.entries(value.features||{}).filter(([,item])=>{const accuracy=item&&item.accuracy,level=String(accuracy&&accuracy.level||accuracy||"").toUpperCase();return warningLevels.has(level);}).map(([name,item])=>{const accuracy=item&&item.accuracy,level=String(accuracy&&accuracy.level||accuracy||"UNKNOWN").toUpperCase();return `${name}: ${level}`;});return {dropped:Number.isFinite(dropped)?dropped:0,accuracyWarnings};}
+          function renderDiagnostics(value){const root=$("diagnostics");root.replaceChildren();const data=value.data||{},cumulative=data.cumulative||{},items=[],quality=reportQualityWarnings(value);if(quality.dropped>0||quality.accuracyWarnings.length)items.push(["Data quality",quality.dropped>0?`${quality.dropped} dropped snapshot(s)`:"No dropped snapshots",quality.accuracyWarnings.length?quality.accuracyWarnings.join(", "):"No declared accuracy warnings"]);const heap=data.heapUsage||cumulative.heapUsage,threads=data.threadStatistics||cumulative.threadStatistics,gc=data.garbageCollection||cumulative.garbageCollection,spark=data.spark||cumulative.spark;if(heap)items.push(["Heap",formatBytes(heap.used??heap.usedBytes),formatBytes(heap.max??heap.maxBytes)]);if(threads)items.push(["Threads",threads.live??threads.threadCount??"-",`peak ${threads.peak??threads.peakThreadCount??"-"}`]);if(gc)items.push(["Garbage collection",gc.count??"-",`${gc.timeMillis??"-"} ms`]);if(spark)items.push(["Spark",spark.compatibility&&spark.compatibility.state||spark.state||"UNAVAILABLE",spark.compatibility&&spark.compatibility.sparkVersion||spark.sparkVersion||"version unknown"]);if(!items.length)items.push(["Snapshot data","Available",`${Object.keys(data).length} data section(s)`]);items.forEach(parts=>{const card=document.createElement("article");parts.forEach((part,index)=>{const node=document.createElement(index===0?"h3":"p");node.textContent=String(part);card.appendChild(node);});root.appendChild(card);});}
+          '@
+          Set-Content -NoNewline -Path $path -Value ($text.Substring(0,$start)+$replacement.Trim()+$text.Substring($end))
+          $verify='scripts/verify-viewer.ps1'
+          $v=Get-Content -Raw $verify
+          $needle=";Write-Output 'Offline viewer schema-v1/mixed-record/rotated-run/manifest-integrity support: PASS'"
+          if(-not $v.Contains($needle)){throw 'viewer verification marker not found'}
+          $extra=";if(`$js -notmatch 'reportQualityWarnings'){throw 'Data-quality warning helper absent'};if(`$js -notmatch 'dropped snapshot'){throw 'Dropped-snapshot warning absent'};if(`$js -notmatch 'APPROXIMATE'){throw 'Accuracy warning levels absent'};Write-Output 'Offline viewer schema-v1/mixed-record/rotated-run/manifest-integrity/data-quality support: PASS'"
+          Set-Content -NoNewline -Path $verify -Value $v.Replace($needle,$extra)
+      - name: Verify offline viewer
+        shell: pwsh
+        run: ./scripts/verify-viewer.ps1
+      - name: Commit product patch and remove one-shot workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add report-viewer/viewer.js scripts/verify-viewer.ps1
+          git rm .github/workflows/apply-viewer-quality-warnings.yml
+          git commit -m 'feat: surface report quality warnings'
+          git push origin HEAD:autopilot-viewer-quality-warnings-20260903
