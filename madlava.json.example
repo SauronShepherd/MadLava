@@ -1,1 +1,43 @@
-{"enabled":true,"output":{"mode":"JSONL_HISTORY","directory":"./madlava-output","intervalSeconds":1,"queueCapacity":64},"features":{"selfObservability":{"enabled":true}}}
+{
+  "output": {
+    "directory": "./madlava-output"
+  },
+  "reporting": {
+    "snapshotIntervalSeconds": 1,
+    "shutdownSnapshotOnly": false,
+    "human": {
+      "enabled": false,
+      "maxRows": 50,
+      "truncate": 100,
+      "sections": {
+        "methodProfiling": {"maxRows": 25},
+        "argumentGroups": {"maxRows": 20},
+        "sparkSerialization": {"maxRows": 30},
+        "sparkSerializationDetail": {"maxRows": 100},
+        "diagnostics": {"maxRows": 50}
+      }
+    }
+  },
+  "features": {
+    "methodProfiling": {
+      "enabled": true,
+      "maxEntries": 2048
+    },
+    "sparkSerialization": {
+      "enabled": true,
+      "profile": "ALL",
+      "rootClasses": true,
+      "maxGroups": 2048
+    }
+  },
+  "filters": {
+    "methods": {
+      "includes": [
+        "com.example.*.*",
+        "org.apache.spark.serializer.JavaSerializerInstance.*",
+        "org.apache.spark.serializer.KryoSerializerInstance.*"
+      ],
+      "excludes": []
+    }
+  }
+}

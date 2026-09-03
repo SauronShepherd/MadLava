@@ -1,0 +1,454 @@
+package com.madlava.instrumentation;
+
+import com.madlava.methods.MethodFilter;
+import com.madlava.methods.MethodKey;
+import com.madlava.methods.MethodRegistry;
+import com.madlava.methods.MethodObservationPlan;
+import com.madlava.methods.MethodObservationMode;
+import com.madlava.methods.MethodObservationRule;
+import com.madlava.methods.MethodProbeBridge;
+import com.madlava.methods.ClassLoaderScope;
+import com.madlava.serialization.SparkSerializationPlan;
+import com.madlava.serialization.SparkSerializationTarget;
+import com.madlava.serialization.SparkSerializationBridge;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.JumpInsnNode;
+import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TryCatchBlockNode;
+import org.objectweb.asm.tree.VarInsnNode;
+
+import java.lang.instrument.ClassFileTransformer;
+import java.security.ProtectionDomain;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * One deterministic transformer for generic method tracing and Spark serializer analysis.
+ */
+public final class MadLavaTransformer implements ClassFileTransformer {
+    private static final String METHOD_BRIDGE = "com/madlava/methods/MethodProbeBridge";
+    private static final String SERIALIZATION_BRIDGE = "com/madlava/serialization/SparkSerializationBridge";
+
+    private final boolean methodProfilingEnabled;
+    private volatile MethodSelection methodSelection;
+    private final MethodRegistry methodRegistry;
+    private final boolean sparkSerializationEnabled;
+    private final SparkSerializationPlan serializationPlan;
+
+    public MadLavaTransformer(
+            boolean methodProfilingEnabled,
+            MethodFilter methodFilter,
+            MethodRegistry methodRegistry,
+            boolean sparkSerializationEnabled,
+            SparkSerializationPlan serializationPlan) {
+        this(methodProfilingEnabled, methodFilter, methodRegistry, sparkSerializationEnabled, serializationPlan, MethodObservationPlan.empty());
+    }
+
+    public MadLavaTransformer(boolean methodProfilingEnabled, MethodFilter methodFilter, MethodRegistry methodRegistry,
+            boolean sparkSerializationEnabled, SparkSerializationPlan serializationPlan, MethodObservationPlan observationPlan) {
+        this.methodProfilingEnabled = methodProfilingEnabled;
+        this.methodSelection = new MethodSelection(
+                methodFilter,
+                observationPlan == null ? MethodObservationPlan.empty() : observationPlan);
+        this.methodRegistry = methodRegistry;
+        this.sparkSerializationEnabled = sparkSerializationEnabled;
+        this.serializationPlan = serializationPlan;
+    }
+
+    @Override
+    public byte[] transform(
+            Module module,
+            ClassLoader loader,
+            String className,
+            Class<?> classBeingRedefined,
+            ProtectionDomain protectionDomain,
+            byte[] classfileBuffer) {
+        // The probe bridge is application-loader code. Never inject calls into bootstrap
+        // classes until a bootstrap-visible bridge is deliberately provisioned.
+        if (loader == null || className == null || classfileBuffer == null || excluded(className) || !mayTransformClass(className)) {
+            return null;
+        }
+
+        List<MethodRegistry.Reservation> methodReservations = new ArrayList<>();
+        List<Integer> matchedSerializationTargets = new ArrayList<>();
+        try {
+            boolean methodBridgeVisible = !methodProfilingEnabled
+                    || bridgeVisible(loader, METHOD_BRIDGE, MethodProbeBridge.class);
+            boolean serializationBridgeVisible = !sparkSerializationEnabled
+                    || bridgeVisible(loader, SERIALIZATION_BRIDGE, SparkSerializationBridge.class);
+            // One class transformation must use one coherent method-selection generation. Hot
+            // reload may publish a newer generation concurrently, but never halfway through this class.
+            MethodSelection selection = methodSelection;
+            if (sparkSerializationEnabled) {
+                serializationPlan.classVisited(className);
+            }
+            ClassReader reader = new ClassReader(classfileBuffer);
+            ClassNode classNode = new ClassNode(Opcodes.ASM9);
+            reader.accept(classNode, 0);
+
+            boolean changed = false;
+            boolean serializationChanged = false;
+            String owner = className.replace('/', '.');
+            String loaderScope = ClassLoaderScope.scope(loader);
+            for (MethodNode method : classNode.methods) {
+                if (!eligible(method)) {
+                    continue;
+                }
+
+                boolean generic = methodProfilingEnabled && methodBridgeVisible
+                        && selection.filter.matches(owner, method.name, method.desc);
+                Optional<MethodObservationRule> observation = generic
+                        ? selection.plan.find(owner, method.name, method.desc)
+                        : Optional.empty();
+                // Observation rules control how an already-selected method is measured. They must
+                // never override MethodFilter admission, because MethodFilter is where exclusions
+                // are applied and the public contract is explicitly "excludes win".
+                boolean traceArgs = generic && observation.isPresent()
+                        && observation.get().mode() == MethodObservationMode.COUNT_BY_ARGS;
+                Optional<SparkSerializationTarget> target = sparkSerializationEnabled && serializationBridgeVisible
+                        ? serializationPlan.find(className, method.name, method.desc)
+                        : Optional.empty();
+                if (!generic && target.isEmpty()) {
+                    continue;
+                }
+
+                int methodId = MethodRegistry.REJECTED_ID;
+                if (generic) {
+                    MethodRegistry.Reservation reservation = methodRegistry.reserve(
+                            new MethodKey(loaderScope, owner, method.name, method.desc));
+                    methodId = reservation.id();
+                    generic = methodId != MethodRegistry.REJECTED_ID;
+                    if (generic) methodReservations.add(reservation);
+                }
+                if (!generic && target.isEmpty()) {
+                    continue;
+                }
+                if (target.isPresent()) {
+                    matchedSerializationTargets.add(target.get().id());
+                    serializationChanged = true;
+                }
+
+                instrument(method, methodId, generic, traceArgs, target.orElse(null));
+                changed = true;
+            }
+
+            if (!changed) {
+                return null;
+            }
+            SafeClassWriter writer = new SafeClassWriter(
+                    reader,
+                    ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS,
+                    loader);
+            classNode.accept(writer);
+            byte[] transformed = writer.toByteArray();
+            for (MethodRegistry.Reservation reservation : methodReservations) methodRegistry.commit(reservation);
+            for (Integer targetId : matchedSerializationTargets) serializationPlan.targetMatched(targetId);
+            if (serializationChanged) serializationPlan.classTransformed();
+            return transformed;
+        } catch (Throwable ignored) {
+            for (MethodRegistry.Reservation reservation : methodReservations) methodRegistry.rollback(reservation);
+            if (sparkSerializationEnabled && serializationPlan.mayMatchClass(className)) {
+                serializationPlan.transformationFailed();
+            }
+            return null;
+        }
+    }
+
+    public boolean mayTransformClass(String internalName) {
+        if (internalName == null || excluded(internalName)) {
+            return false;
+        }
+        String owner = internalName.replace('/', '.');
+        MethodSelection selection = methodSelection;
+        return (methodProfilingEnabled && selection.filter.mayMatchClass(owner))
+                || (sparkSerializationEnabled && serializationPlan.mayMatchClass(internalName));
+    }
+
+    public void updateMethodSelection(MethodFilter filter, MethodObservationPlan plan) {
+        if (filter != null && plan != null) this.methodSelection = new MethodSelection(filter, plan);
+    }
+    public void updateMethodFilter(MethodFilter filter) {
+        if (filter != null) { MethodSelection current = methodSelection; this.methodSelection = new MethodSelection(filter, current.plan); }
+    }
+    public void updateObservationPlan(MethodObservationPlan plan) {
+        if (plan != null) { MethodSelection current = methodSelection; this.methodSelection = new MethodSelection(current.filter, plan); }
+    }
+
+    private static final class MethodSelection {
+        private final MethodFilter filter;
+        private final MethodObservationPlan plan;
+        private MethodSelection(MethodFilter filter, MethodObservationPlan plan) {
+            if (filter == null || plan == null) throw new IllegalArgumentException("method selection");
+            this.filter = filter;
+            this.plan = plan;
+        }
+    }
+
+    private static void instrument(
+            MethodNode method,
+            int methodId,
+            boolean generic,
+            boolean traceArgs,
+            SparkSerializationTarget serializationTarget) {
+        List<AbstractInsnNode> originalReturns = new ArrayList<>();
+        for (AbstractInsnNode instruction = method.instructions.getFirst();
+             instruction != null;
+             instruction = instruction.getNext()) {
+            if (isReturn(instruction.getOpcode())) {
+                originalReturns.add(instruction);
+            }
+        }
+
+        int nextLocal = method.maxLocals;
+        int methodStartedLocal = -1;
+        if (generic) {
+            methodStartedLocal = nextLocal;
+            nextLocal += 2;
+        }
+        int argumentsLocal = -1;
+        if (traceArgs) { argumentsLocal = nextLocal++; }
+        int serializationTokenLocal = -1;
+        if (serializationTarget != null) {
+            serializationTokenLocal = nextLocal;
+            nextLocal += 2;
+        }
+        int throwableLocal = nextLocal;
+        nextLocal += 1;
+        method.maxLocals = Math.max(method.maxLocals, nextLocal);
+
+        LabelNode protectedStart = new LabelNode();
+        LabelNode protectedEnd = new LabelNode();
+        LabelNode handler = new LabelNode();
+
+        InsnList entry = new InsnList();
+        LabelNode argumentsStart = null;
+        LabelNode argumentsEnd = null;
+        LabelNode argumentsHandler = null;
+        LabelNode argumentsContinue = null;
+        if (traceArgs) {
+            // Build the optional argument grouping tuple before starting the method timer.
+            // Allocation/boxing is profiler overhead and must not inflate application duration.
+            entry.add(new InsnNode(Opcodes.ACONST_NULL));
+            entry.add(new VarInsnNode(Opcodes.ASTORE, argumentsLocal));
+            argumentsStart = new LabelNode();
+            argumentsEnd = new LabelNode();
+            argumentsHandler = new LabelNode();
+            argumentsContinue = new LabelNode();
+            entry.add(argumentsStart);
+            appendArgumentsArray(entry, method.access, method.desc);
+            entry.add(new VarInsnNode(Opcodes.ASTORE, argumentsLocal));
+            entry.add(argumentsEnd);
+            entry.add(new JumpInsnNode(Opcodes.GOTO, argumentsContinue));
+            entry.add(argumentsHandler);
+            entry.add(new InsnNode(Opcodes.POP));
+            entry.add(argumentsContinue);
+        }
+        if (generic) {
+            entry.add(new LdcInsnNode(methodId));
+            entry.add(new MethodInsnNode(
+                    Opcodes.INVOKESTATIC,
+                    METHOD_BRIDGE,
+                    "enter",
+                    "(I)J",
+                    false));
+            entry.add(new VarInsnNode(Opcodes.LSTORE, methodStartedLocal));
+            if (traceArgs) {
+                // COUNT_BY_ARGS represents method invocations, not method completions. Record the
+                // grouping at entry so calls that never return (or cross a checkpoint boundary)
+                // do not leave the parent invocation and its argument group in different logical
+                // intervals. The non-zero entry token still ties grouping to a successful enter().
+                entry.add(new LdcInsnNode(methodId));
+                entry.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
+                entry.add(new VarInsnNode(Opcodes.ALOAD, argumentsLocal));
+                entry.add(new MethodInsnNode(Opcodes.INVOKESTATIC, METHOD_BRIDGE, "traceArguments", "(IJ[Ljava/lang/Object;)V", false));
+            }
+        }
+        if (serializationTarget != null) {
+            entry.add(new LdcInsnNode(serializationTarget.id()));
+            appendPrimaryArgument(entry, method.access, method.desc, serializationTarget.primaryArgumentIndex());
+            entry.add(new MethodInsnNode(
+                    Opcodes.INVOKESTATIC,
+                    SERIALIZATION_BRIDGE,
+                    "enter",
+                    "(ILjava/lang/Object;)J",
+                    false));
+            entry.add(new VarInsnNode(Opcodes.LSTORE, serializationTokenLocal));
+        }
+        entry.add(protectedStart);
+        method.instructions.insert(entry);
+
+        for (AbstractInsnNode returnInstruction : originalReturns) {
+            InsnList exit = new InsnList();
+            if (serializationTarget != null) {
+                if (returnInstruction.getOpcode() == Opcodes.ARETURN) {
+                    exit.add(new InsnNode(Opcodes.DUP));
+                } else {
+                    exit.add(new InsnNode(Opcodes.ACONST_NULL));
+                }
+                exit.add(new VarInsnNode(Opcodes.LLOAD, serializationTokenLocal));
+                exit.add(new MethodInsnNode(
+                        Opcodes.INVOKESTATIC,
+                        SERIALIZATION_BRIDGE,
+                        "success",
+                        "(Ljava/lang/Object;J)V",
+                        false));
+            }
+            if (generic) {
+                // Stop timing before COUNT_BY_ARGS canonicalization/aggregation.
+                exit.add(new LdcInsnNode(methodId));
+                exit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
+                exit.add(new MethodInsnNode(
+                        Opcodes.INVOKESTATIC,
+                        METHOD_BRIDGE,
+                        "normalExit",
+                        "(IJ)V",
+                        false));
+            }
+            method.instructions.insertBefore(returnInstruction, exit);
+        }
+
+        InsnList exceptionalExit = new InsnList();
+        exceptionalExit.add(protectedEnd);
+        exceptionalExit.add(handler);
+        exceptionalExit.add(new VarInsnNode(Opcodes.ASTORE, throwableLocal));
+        if (serializationTarget != null) {
+            exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, throwableLocal));
+            exceptionalExit.add(new VarInsnNode(Opcodes.LLOAD, serializationTokenLocal));
+            exceptionalExit.add(new MethodInsnNode(
+                    Opcodes.INVOKESTATIC,
+                    SERIALIZATION_BRIDGE,
+                    "failure",
+                    "(Ljava/lang/Throwable;J)V",
+                    false));
+        }
+        if (generic) {
+            // Stop timing before COUNT_BY_ARGS canonicalization/aggregation.
+            exceptionalExit.add(new LdcInsnNode(methodId));
+            exceptionalExit.add(new VarInsnNode(Opcodes.LLOAD, methodStartedLocal));
+            exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, throwableLocal));
+            exceptionalExit.add(new MethodInsnNode(
+                    Opcodes.INVOKESTATIC,
+                    METHOD_BRIDGE,
+                    "exceptionalExit",
+                    "(IJLjava/lang/Throwable;)V",
+                    false));
+        }
+        exceptionalExit.add(new VarInsnNode(Opcodes.ALOAD, throwableLocal));
+        exceptionalExit.add(new InsnNode(Opcodes.ATHROW));
+        method.instructions.add(exceptionalExit);
+        if (traceArgs) {
+            method.tryCatchBlocks.add(new TryCatchBlockNode(
+                    argumentsStart,
+                    argumentsEnd,
+                    argumentsHandler,
+                    "java/lang/Throwable"));
+        }
+        method.tryCatchBlocks.add(new TryCatchBlockNode(
+                protectedStart,
+                protectedEnd,
+                handler,
+                "java/lang/Throwable"));
+    }
+
+    private static void appendArgumentsArray(InsnList instructions, int access, String descriptor) {
+        Type[] arguments = Type.getArgumentTypes(descriptor);
+        instructions.add(new LdcInsnNode(arguments.length));
+        instructions.add(new org.objectweb.asm.tree.TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"));
+        int local = (access & Opcodes.ACC_STATIC) == 0 ? 1 : 0;
+        for (int index = 0; index < arguments.length; index++) {
+            Type type = arguments[index];
+            instructions.add(new InsnNode(Opcodes.DUP));
+            instructions.add(new LdcInsnNode(index));
+            instructions.add(new VarInsnNode(type.getOpcode(Opcodes.ILOAD), local));
+            box(instructions, type);
+            instructions.add(new InsnNode(Opcodes.AASTORE));
+            local += type.getSize();
+        }
+    }
+
+    private static void box(InsnList instructions, Type type) {
+        if (type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY) return;
+        String owner; String descriptor;
+        switch (type.getSort()) {
+            case Type.BOOLEAN: owner="java/lang/Boolean"; descriptor="(Z)Ljava/lang/Boolean;"; break;
+            case Type.BYTE: owner="java/lang/Byte"; descriptor="(B)Ljava/lang/Byte;"; break;
+            case Type.CHAR: owner="java/lang/Character"; descriptor="(C)Ljava/lang/Character;"; break;
+            case Type.SHORT: owner="java/lang/Short"; descriptor="(S)Ljava/lang/Short;"; break;
+            case Type.INT: owner="java/lang/Integer"; descriptor="(I)Ljava/lang/Integer;"; break;
+            case Type.FLOAT: owner="java/lang/Float"; descriptor="(F)Ljava/lang/Float;"; break;
+            case Type.LONG: owner="java/lang/Long"; descriptor="(J)Ljava/lang/Long;"; break;
+            case Type.DOUBLE: owner="java/lang/Double"; descriptor="(D)Ljava/lang/Double;"; break;
+            default: return;
+        }
+        instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, owner, "valueOf", descriptor, false));
+    }
+
+    private static void appendPrimaryArgument(
+            InsnList instructions,
+            int access,
+            String descriptor,
+            int argumentIndex) {
+        if (argumentIndex < 0) {
+            instructions.add(new InsnNode(Opcodes.ACONST_NULL));
+            return;
+        }
+        Type[] arguments = Type.getArgumentTypes(descriptor);
+        if (argumentIndex >= arguments.length) {
+            instructions.add(new InsnNode(Opcodes.ACONST_NULL));
+            return;
+        }
+        int local = (access & Opcodes.ACC_STATIC) == 0 ? 1 : 0;
+        for (int index = 0; index < argumentIndex; index++) {
+            local += arguments[index].getSize();
+        }
+        Type argumentType = arguments[argumentIndex];
+        if (argumentType.getSort() != Type.OBJECT && argumentType.getSort() != Type.ARRAY) {
+            instructions.add(new InsnNode(Opcodes.ACONST_NULL));
+            return;
+        }
+        instructions.add(new VarInsnNode(Opcodes.ALOAD, local));
+    }
+
+    private static boolean bridgeVisible(ClassLoader loader, String internalName, Class<?> expected) {
+        try {
+            return Class.forName(internalName.replace('/', '.'), false, loader) == expected;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean eligible(MethodNode method) {
+        if ("<init>".equals(method.name) || "<clinit>".equals(method.name)) {
+            return false;
+        }
+        return (method.access & (Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE)) == 0;
+    }
+
+    private static boolean isReturn(int opcode) {
+        return opcode == Opcodes.RETURN
+                || opcode == Opcodes.IRETURN
+                || opcode == Opcodes.LRETURN
+                || opcode == Opcodes.FRETURN
+                || opcode == Opcodes.DRETURN
+                || opcode == Opcodes.ARETURN;
+    }
+
+    private static boolean excluded(String className) {
+        return className.startsWith("com/madlava/")
+                || className.startsWith("org/objectweb/asm/")
+                || className.startsWith("com/madlava/internal/asm/")
+                || "module-info".equals(className);
+    }
+
+}

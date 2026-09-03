@@ -3,6 +3,7 @@ package com.madlava.reporting;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.LongAdder;
 
+/** Bounded latest-value queue. When full, the oldest queued record is evicted. */
 public final class BoundedSnapshotQueue {
     private final ArrayBlockingQueue<String> queue;
     private final LongAdder dropped = new LongAdder();
@@ -14,14 +15,23 @@ public final class BoundedSnapshotQueue {
         queue = new ArrayBlockingQueue<>(capacity);
     }
 
+    /**
+     * Producer-side eviction is synchronized so concurrent producers cannot both observe a full
+     * queue, over-evict records, or miscount a consumer removal as a producer drop.
+     */
     public synchronized void submit(String value) {
         if (queue.offer(value)) {
             return;
         }
-        if (queue.poll() != null) {
+        String evicted = queue.poll();
+        if (evicted != null) {
             dropped.increment();
         }
-        queue.offer(value);
+        // No other producer can refill while this method is synchronized; synchronizing poll()
+        // also keeps the eviction/accounting transition atomic with respect to consumers.
+        if (!queue.offer(value)) {
+            throw new IllegalStateException("Unable to enqueue after bounded eviction");
+        }
     }
 
     public synchronized String poll() {

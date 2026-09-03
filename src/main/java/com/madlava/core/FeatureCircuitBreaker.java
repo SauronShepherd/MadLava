@@ -10,5 +10,7 @@ public final class FeatureCircuitBreaker {
     public boolean allow(){long opened=openedAt.get();if(opened<0)return true;if(clock.millis()-opened<cooldownMillis)return false;if(openedAt.compareAndSet(opened,-1)){failures.set(0);return true;}return openedAt.get()<0;}
     public void success(){failures.set(0);openedAt.set(-1);}
     public void failure(){if(failures.incrementAndGet()>=threshold)openedAt.compareAndSet(-1,clock.millis());}
-    public int failures(){return failures.get();} public boolean open(){return !allow();}
+    public int failures(){return failures.get();}
+    /** Pure status query: unlike allow(), this never transitions or resets the breaker. */
+    public boolean open(){long opened=openedAt.get();return opened>=0&&clock.millis()-opened<cooldownMillis;}
 }

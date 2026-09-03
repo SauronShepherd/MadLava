@@ -29,9 +29,10 @@ final class JfrThrowableMonitor implements AutoCloseable {
             Method start=streamType.getMethod("start");Object activeStream=stream;
             Thread worker=new Thread(()->{try{start.invoke(activeStream);}catch(Throwable ignored){}},"madlava-jfr-stream");
             worker.setDaemon(true);worker.start();
-            state=ready.await(5,TimeUnit.SECONDS)?State.RUNNING:State.FAILED;
+            if(ready.await(5,TimeUnit.SECONDS))state=State.RUNNING;
+            else { state=State.FAILED; close(); state=State.FAILED; }
         }catch(ClassNotFoundException unavailable){state=State.UNAVAILABLE;}
-        catch(Throwable failure){state=State.FAILED;}
+        catch(Throwable failure){state=State.FAILED;try{close();}catch(Throwable ignored){}state=State.FAILED;}
     }
     @Override public void close(){
         Object activeStream=stream;Method closeMethod=close;

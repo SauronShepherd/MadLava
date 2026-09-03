@@ -28,7 +28,10 @@ public final class ProbeBridge {
         guarded(() -> {
             ArrayDeque<Construction> stack = CONSTRUCTIONS.get();
             LastCompletion previous = LAST_COMPLETION.get();
-            if (previous != null && previous.instance.get() == instance) decrement(CONSTRUCTED, previous.type);
+            if (previous != null && previous.instance.get() == instance) {
+                decrement(CONSTRUCTED, previous.constructedBucket);
+                if (previous.throwableBucket != null) decrement(THROWABLE_CREATED, previous.throwableBucket);
+            }
             LAST_COMPLETION.remove();
             stack.push(new Construction(type));
         });
@@ -39,9 +42,9 @@ public final class ProbeBridge {
             Construction frame = pop();
             if (frame != null) {
                 String type = instance == null ? frame.type : instance.getClass().getName();
-                increment(CONSTRUCTED, type);
-                if (instance instanceof Throwable) increment(THROWABLE_CREATED, type);
-                LAST_COMPLETION.set(new LastCompletion(instance, type));
+                String constructedBucket = increment(CONSTRUCTED, type);
+                String throwableBucket = instance instanceof Throwable ? increment(THROWABLE_CREATED, type) : null;
+                LAST_COMPLETION.set(new LastCompletion(instance, constructedBucket, throwableBucket));
             }
         });
     }
@@ -56,7 +59,7 @@ public final class ProbeBridge {
         guarded(() -> increment(PROPAGATIONS, value == null ? "unknown" : value.getClass().getName()));
     }
     static void jfrThrow(String type){increment(JFR_THROWS,type);}
-    public static void configureJfr(boolean enabled){if(enabled)JFR.start();}
+    public static void configureJfr(boolean enabled){if(enabled)JFR.start();else JFR.close();}
     public static void shutdownJfr(){JFR.close();}
 
     public static Snapshot snapshot() {
@@ -77,11 +80,18 @@ public final class ProbeBridge {
         return result;
     }
 
-    private static void increment(ConcurrentHashMap<String, LongAdder> target, String key) {
+    private static String increment(ConcurrentHashMap<String, LongAdder> target, String key) {
         LongAdder existing = target.get(key);
-        if (existing != null) { existing.increment(); return; }
-        if (target.size() >= MAX_GROUPS) key = "other";
-        target.computeIfAbsent(key, ignored -> new LongAdder()).increment();
+        if (existing != null) { existing.increment(); return key; }
+        synchronized (target) {
+            existing = target.get(key);
+            if (existing == null) {
+                if (target.size() >= MAX_GROUPS - 1) key = "other";
+                existing = target.computeIfAbsent(key, ignored -> new LongAdder());
+            }
+        }
+        existing.increment();
+        return key;
     }
     private static void decrement(ConcurrentHashMap<String, LongAdder> target, String key) {
         LongAdder value=target.get(key); if(value!=null)value.decrement();
@@ -97,12 +107,19 @@ public final class ProbeBridge {
         if (CALLBACK.get()) return;
         CALLBACK.set(Boolean.TRUE);
         try { Runnable injected=failureInjection;if(injected!=null)injected.run();callback.run(); } catch (Throwable ignored) { /* application behavior wins */ }
-        finally { CALLBACK.set(Boolean.FALSE); }
+        finally { CALLBACK.remove(); }
     }
 
     private static final ThreadLocal<LastCompletion> LAST_COMPLETION = new ThreadLocal<>();
     private static final class Construction { private final String type; private Construction(String type){this.type=type;} }
-    private static final class LastCompletion { private final WeakReference<Object> instance;private final String type;private LastCompletion(Object value,String type){this.instance=new WeakReference<>(value);this.type=type;} }
+    private static final class LastCompletion {
+        private final WeakReference<Object> instance;
+        private final String constructedBucket;
+        private final String throwableBucket;
+        private LastCompletion(Object value,String constructedBucket,String throwableBucket){
+            this.instance=new WeakReference<>(value);this.constructedBucket=constructedBucket;this.throwableBucket=throwableBucket;
+        }
+    }
 
     public static final class Snapshot {
         private final Map<String,Long> constructed, throwableCreated, explicitThrows, propagations,jfrThrows;
