@@ -26,3 +26,4 @@ jobs:
         run: |
           ./scripts/verify-viewer.ps1
           ./scripts/verify-viewer-time-filter.ps1
+          ./scripts/verify-viewer-filtered-export.ps1
