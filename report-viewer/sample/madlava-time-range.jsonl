@@ -1,0 +1,4 @@
+{"schemaVersion":1,"timestamp":"2026-09-04T10:00:00Z","sequence":1,"agentVersion":"dev","features":{}}
+{"recordType":"configuration-change","timestamp":"2026-09-04T10:05:00Z","type":"configuration-change","status":"applied"}
+{"recordType":"configuration-change","timestamp":"2026-09-04T10:15:00Z","type":"configuration-change","status":"applied"}
+{"recordType":"configuration-change","type":"configuration-change","status":"applied"}

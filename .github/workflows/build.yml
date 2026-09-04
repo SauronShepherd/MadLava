@@ -23,4 +23,6 @@ jobs:
         run: mvn -B -Pgeneric clean verify -Drevision=0.1.0
       - name: Verify offline report viewer contract
         shell: pwsh
-        run: ./scripts/verify-viewer.ps1
+        run: |
+          ./scripts/verify-viewer.ps1
+          ./scripts/verify-viewer-time-filter.ps1
