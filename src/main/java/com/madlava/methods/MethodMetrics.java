@@ -51,8 +51,10 @@ public final class MethodMetrics {
             return;
         }
         Counters values = counters.computeIfAbsent(methodId, ignored -> new Counters());
-        values.normalCompletions.increment();
+        // Publish duration aggregates before the completion count. report() uses a non-zero
+        // completion count as the signal that min/max duration state is initialized.
         values.recordDuration(durationNanos);
+        values.normalCompletions.increment();
         emitTrace(methodId, durationNanos);
     }
 
@@ -61,8 +63,10 @@ public final class MethodMetrics {
             return;
         }
         Counters values = counters.computeIfAbsent(methodId, ignored -> new Counters());
-        values.exceptionalCompletions.increment();
+        // Keep the same publication order as normalCompletion so live snapshots can never
+        // observe a completion backed by LongAccumulator identity values.
         values.recordDuration(durationNanos);
+        values.exceptionalCompletions.increment();
         emitTrace(methodId, durationNanos);
     }
 
