@@ -12,6 +12,8 @@ if ($timeFilter -notmatch 'timestamp < start') { throw 'Inclusive lower-bound co
 if ($timeFilter -notmatch 'timestamp > end') { throw 'Inclusive upper-bound contract absent' }
 if ($timeFilter -notmatch 'timestamp === null') { throw 'Untimestamped-record exclusion contract absent' }
 if ($timeFilter -notmatch 'start > end') { throw 'Invalid-range handling absent' }
+if ($timeFilter -notmatch 'rejectInvalidBound') { throw 'Invalid individual time-bound handling absent' }
+if ($timeFilter -notmatch 'Invalid .* time bound') { throw 'Invalid individual time-bound feedback absent' }
 if ($timeFilter -match '\beval\s*\(') { throw 'eval is forbidden in time-range filter' }
 if ($timeFilter -match 'innerHTML') { throw 'Unsafe innerHTML is forbidden in time-range filter' }
 
