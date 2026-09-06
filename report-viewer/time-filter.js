@@ -19,11 +19,23 @@
     return true;
   }
 
+  function rejectInvalidBound(input, timestamp, label) {
+    if (!input.value || timestamp !== null) return false;
+    visibleRecords = [];
+    rawRecordSelector.replaceChildren();
+    rawRecordSelector.value = "";
+    renderRawRecord(-1);
+    $("raw-record-context").textContent = `Invalid ${label} time bound. Enter a valid date and time.`;
+    return true;
+  }
+
   function applyTimeRangeFilter() {
     const start = boundTimestamp(startInput);
     const end = boundTimestamp(endInput);
     const active = Boolean(startInput.value || endInput.value);
     const kind = rawRecordFilter.value;
+
+    if (rejectInvalidBound(startInput, start, "start") || rejectInvalidBound(endInput, end, "end")) return;
 
     if (start !== null && end !== null && start > end) {
       visibleRecords = [];
