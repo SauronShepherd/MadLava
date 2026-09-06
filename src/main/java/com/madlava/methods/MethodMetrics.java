@@ -107,8 +107,9 @@ public final class MethodMetrics {
 
     private void emitTrace(int methodId, long durationNanos) {
         TraceConfiguration tracing = traceConfiguration;
+        if(tracing==null)return;
         MethodKey key=registry.key(methodId);
-        if(tracing==null||key==null||!tracing.sampler.sample())return;
+        if(key==null||!tracing.sampler.sample())return;
         try { tracing.sink.accept(TraceEvent.methodCall(tracing.configurationVersion,key.owner(),key.name(),key.descriptor(),durationNanos,null)); }
         catch(Throwable ignored) { }
     }

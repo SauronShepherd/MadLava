@@ -8,9 +8,18 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class MethodMetricsTracingTest {
+    @Test
+    void disabledTracingDoesNotResolveMethodIdentity() {
+        MethodMetrics metrics = new MethodMetrics(null);
+
+        assertDoesNotThrow(() -> metrics.normalCompletion(1, 1L));
+        assertDoesNotThrow(() -> metrics.exceptionalCompletion(1, 1L));
+    }
+
     @Test
     void hotReloadPublishesTraceVersionSamplerAndSinkAsOneGeneration() throws Exception {
         MethodRegistry registry = new MethodRegistry(8);
