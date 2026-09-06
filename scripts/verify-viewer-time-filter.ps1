@@ -7,6 +7,9 @@ if ($html -notmatch 'raw-record-time-start') { throw 'Raw record time-range star
 if ($html -notmatch 'raw-record-time-end') { throw 'Raw record time-range end control absent' }
 if ($html -notmatch 'Time bounds are inclusive') { throw 'Inclusive time-range semantics not documented in UI' }
 if ($html -notmatch 'time-filter\.js') { throw 'Time-range filter script absent' }
+if ($html -notmatch 'raw-record-time-start"[^>]*aria-describedby="raw-record-time-help raw-record-context"') { throw 'Start time control is not connected to help and validation feedback' }
+if ($html -notmatch 'raw-record-time-end"[^>]*aria-describedby="raw-record-time-help raw-record-context"') { throw 'End time control is not connected to help and validation feedback' }
+if ($html -notmatch 'raw-record-context" role="status" aria-live="polite"') { throw 'Time-range validation feedback is not announced as a polite live status' }
 if ($timeFilter -notmatch 'recordTimestamp') { throw 'Time-range filtering does not reuse report timestamp semantics' }
 if ($timeFilter -notmatch 'timestamp < start') { throw 'Inclusive lower-bound contract absent' }
 if ($timeFilter -notmatch 'timestamp > end') { throw 'Inclusive upper-bound contract absent' }
@@ -14,6 +17,8 @@ if ($timeFilter -notmatch 'timestamp === null') { throw 'Untimestamped-record ex
 if ($timeFilter -notmatch 'start > end') { throw 'Invalid-range handling absent' }
 if ($timeFilter -notmatch 'rejectInvalidBound') { throw 'Invalid individual time-bound handling absent' }
 if ($timeFilter -notmatch 'Invalid .* time bound') { throw 'Invalid individual time-bound feedback absent' }
+if ($timeFilter -notmatch 'setAttribute\("aria-invalid", "true"\)') { throw 'Invalid bounds do not expose aria-invalid' }
+if ($timeFilter -notmatch 'removeAttribute\("aria-invalid"\)') { throw 'Corrected bounds do not clear aria-invalid' }
 if ($timeFilter -match '\beval\s*\(') { throw 'eval is forbidden in time-range filter' }
 if ($timeFilter -match 'innerHTML') { throw 'Unsafe innerHTML is forbidden in time-range filter' }
 
@@ -32,4 +37,4 @@ if ($untimestamped.Count -ne 1) { throw 'Untimestamped exclusion fixture contrac
 
 & node --check report-viewer/time-filter.js
 if ($LASTEXITCODE -ne 0) { throw 'Time-range filter JavaScript syntax check failed' }
-Write-Output 'Offline viewer inclusive timestamp-range filtering support: PASS'
+Write-Output 'Offline viewer inclusive timestamp-range filtering and accessibility support: PASS'
