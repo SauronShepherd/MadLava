@@ -16,6 +16,7 @@ class JsonlWriterRotationTest {
         assertTrue(Files.exists(next));
         assertTrue(Files.walk(root.resolve("b")).anyMatch(path -> path.toString().endsWith(".jsonl")));
         assertTrue(Files.walk(root.resolve("a")).anyMatch(path -> path.toString().endsWith(".jsonl")));
+        assertEquals(2, writer.manifestFinalizationCount(), "rotation and final close each finalize exactly once");
     }
     @Test void sizeRolloverKeepsDocumentedActivePathAndBuildsWholeRunManifest() throws Exception {
         Path root=Files.createTempDirectory("madlava-size-rotation");Path active=root.resolve("madlava.jsonl");
@@ -29,6 +30,9 @@ class JsonlWriterRotationTest {
         assertTrue(manifest.contains("\"path\":\"segments/segment-"));
         assertTrue(manifest.contains("\"path\":\"madlava.jsonl\""));
         assertTrue(manifest.matches("(?s).*\\\"sha256\\\":\\\"[0-9a-f]{64}\\\".*"));
+        assertEquals(1, writer.manifestFinalizationCount(), "close must not rewrite the final manifest twice");
+        writer.close();
+        assertEquals(1, writer.manifestFinalizationCount(), "repeated close stays idempotent");
     }
 
     @Test void finalManifestEscapesControlCharactersInReportPath() {

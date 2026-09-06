@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Single-consumer JSONL writer with bounded segment rotation.
@@ -26,9 +27,9 @@ public final class JsonlWriter implements AutoCloseable {
     private static final long DEFAULT_MAX_SEGMENT_BYTES = 100L * 1024L * 1024L;
     private final BoundedSnapshotQueue queue;
     private final AtomicBoolean running = new AtomicBoolean();
+    private final AtomicLong manifestFinalizations = new AtomicLong();
     private final long maxSegmentBytes;
     private volatile boolean drainOnStop = true;
-    private volatile boolean closeRequested;
     private volatile Path path;
     private Thread thread;
 
@@ -51,7 +52,6 @@ public final class JsonlWriter implements AutoCloseable {
 
     private void startPrepared() {
         drainOnStop = true;
-        closeRequested = false;
         running.set(true);
         thread = new Thread(this::run, "madlava-writer");
         thread.setDaemon(true);
@@ -118,7 +118,6 @@ public final class JsonlWriter implements AutoCloseable {
             System.err.println("MadLava writer disabled: " + error.getClass().getSimpleName());
         } finally {
             running.set(false);
-            if (closeRequested) finalizeManifest();
         }
     }
 
@@ -126,7 +125,6 @@ public final class JsonlWriter implements AutoCloseable {
     public synchronized void close() {
         if (thread == null && !running.get()) return;
         drainOnStop = true;
-        closeRequested = true;
         running.set(false);
         Thread worker = thread;
         if (worker != null) {
@@ -144,11 +142,9 @@ public final class JsonlWriter implements AutoCloseable {
         prepareDestination(nextPath);
         if (thread == null && !running.get()) {
             path = nextPath;
-            closeRequested = false;
             drainOnStop = true;
             return;
         }
-        closeRequested = false;
         drainOnStop = false;
         running.set(false);
         Thread worker = thread;
@@ -165,6 +161,10 @@ public final class JsonlWriter implements AutoCloseable {
 
     public synchronized boolean isWorkerAlive() {
         return thread != null && thread.isAlive();
+    }
+
+    long manifestFinalizationCount() {
+        return manifestFinalizations.get();
     }
 
     private void finalizeManifest() {
@@ -200,6 +200,7 @@ public final class JsonlWriter implements AutoCloseable {
                     hex(digest.digest()), fileEntries);
             Files.writeString(path.resolveSibling("madlava-report-manifest.json"), manifest,
                     StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            manifestFinalizations.incrementAndGet();
         } catch (Throwable ignored) {
             // Integrity metadata must never affect application shutdown.
         }
