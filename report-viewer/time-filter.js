@@ -19,8 +19,17 @@
     return true;
   }
 
+  function markBoundValidity(input, valid) {
+    if (valid) input.removeAttribute("aria-invalid");
+    else input.setAttribute("aria-invalid", "true");
+  }
+
   function rejectInvalidBound(input, timestamp, label) {
-    if (!input.value || timestamp !== null) return false;
+    if (!input.value || timestamp !== null) {
+      markBoundValidity(input, true);
+      return false;
+    }
+    markBoundValidity(input, false);
     visibleRecords = [];
     rawRecordSelector.replaceChildren();
     rawRecordSelector.value = "";
@@ -38,6 +47,8 @@
     if (rejectInvalidBound(startInput, start, "start") || rejectInvalidBound(endInput, end, "end")) return;
 
     if (start !== null && end !== null && start > end) {
+      markBoundValidity(startInput, false);
+      markBoundValidity(endInput, false);
       visibleRecords = [];
       rawRecordSelector.replaceChildren();
       rawRecordSelector.value = "";
@@ -46,6 +57,8 @@
       return;
     }
 
+    markBoundValidity(startInput, true);
+    markBoundValidity(endInput, true);
     visibleRecords = records.filter(record =>
       (kind === "all" || record.kind === kind) && recordWithinTimeRange(record, start, end, active)
     );
