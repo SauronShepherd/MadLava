@@ -2,6 +2,7 @@
 (() => {
   const startInput = $("raw-record-time-start");
   const endInput = $("raw-record-time-end");
+  const clearButton = $("clear-raw-record-time");
   const basePopulateRawRecords = populateRawRecords;
 
   function boundTimestamp(input) {
@@ -82,6 +83,16 @@
     }
   }
 
+  function clearTimeRangeFilter() {
+    startInput.value = "";
+    endInput.value = "";
+    markBoundValidity(startInput, true);
+    markBoundValidity(endInput, true);
+    applyTimeRangeFilter();
+    $("raw-record-context").textContent = "Time bounds cleared. Showing records from the active type filter.";
+    startInput.focus();
+  }
+
   populateRawRecords = function populateRawRecordsWithTimeRange() {
     basePopulateRawRecords();
     if (startInput.value || endInput.value) applyTimeRangeFilter();
@@ -89,4 +100,5 @@
 
   startInput.addEventListener("input", applyTimeRangeFilter);
   endInput.addEventListener("input", applyTimeRangeFilter);
+  clearButton.addEventListener("click", clearTimeRangeFilter);
 })();
