@@ -44,4 +44,6 @@ if ($untimestamped.Count -ne 1) { throw 'Untimestamped exclusion fixture contrac
 
 & node --check report-viewer/time-filter.js
 if ($LASTEXITCODE -ne 0) { throw 'Time-range filter JavaScript syntax check failed' }
-Write-Output 'Offline viewer inclusive timestamp-range filtering, accessibility, and clear action: PASS'
+& node scripts/verify-viewer-time-filter-behavior.mjs
+if ($LASTEXITCODE -ne 0) { throw 'Time-range filter behavior harness failed' }
+Write-Output 'Offline viewer inclusive timestamp-range filtering, accessibility, clear action, and behavior: PASS'
