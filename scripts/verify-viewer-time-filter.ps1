@@ -5,7 +5,9 @@ $timeFilter = Get-Content -Raw report-viewer/time-filter.js
 
 if ($html -notmatch 'raw-record-time-start') { throw 'Raw record time-range start control absent' }
 if ($html -notmatch 'raw-record-time-end') { throw 'Raw record time-range end control absent' }
+if ($html -notmatch 'clear-raw-record-time') { throw 'Clear time-range control absent' }
 if ($html -notmatch 'Time bounds are inclusive') { throw 'Inclusive time-range semantics not documented in UI' }
+if ($html -notmatch 'Clear time bounds restores the active type filter') { throw 'Clear-time behavior is not documented in UI' }
 if ($html -notmatch 'time-filter\.js') { throw 'Time-range filter script absent' }
 if ($html -notmatch 'raw-record-time-start"[^>]*aria-describedby="raw-record-time-help raw-record-context"') { throw 'Start time control is not connected to help and validation feedback' }
 if ($html -notmatch 'raw-record-time-end"[^>]*aria-describedby="raw-record-time-help raw-record-context"') { throw 'End time control is not connected to help and validation feedback' }
@@ -19,6 +21,11 @@ if ($timeFilter -notmatch 'rejectInvalidBound') { throw 'Invalid individual time
 if ($timeFilter -notmatch 'Invalid .* time bound') { throw 'Invalid individual time-bound feedback absent' }
 if ($timeFilter -notmatch 'setAttribute\("aria-invalid", "true"\)') { throw 'Invalid bounds do not expose aria-invalid' }
 if ($timeFilter -notmatch 'removeAttribute\("aria-invalid"\)') { throw 'Corrected bounds do not clear aria-invalid' }
+if ($timeFilter -notmatch 'clearTimeRangeFilter') { throw 'Clear time-range behavior absent' }
+if ($timeFilter -notmatch 'startInput\.value = ""') { throw 'Clear action does not reset start bound' }
+if ($timeFilter -notmatch 'endInput\.value = ""') { throw 'Clear action does not reset end bound' }
+if ($timeFilter -notmatch 'clearButton\.addEventListener\("click", clearTimeRangeFilter\)') { throw 'Clear action is not keyboard/button invokable' }
+if ($timeFilter -notmatch 'startInput\.focus\(\)') { throw 'Clear action does not return focus to the filter controls' }
 if ($timeFilter -match '\beval\s*\(') { throw 'eval is forbidden in time-range filter' }
 if ($timeFilter -match 'innerHTML') { throw 'Unsafe innerHTML is forbidden in time-range filter' }
 
@@ -37,4 +44,4 @@ if ($untimestamped.Count -ne 1) { throw 'Untimestamped exclusion fixture contrac
 
 & node --check report-viewer/time-filter.js
 if ($LASTEXITCODE -ne 0) { throw 'Time-range filter JavaScript syntax check failed' }
-Write-Output 'Offline viewer inclusive timestamp-range filtering and accessibility support: PASS'
+Write-Output 'Offline viewer inclusive timestamp-range filtering, accessibility, and clear action: PASS'
