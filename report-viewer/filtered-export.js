@@ -12,24 +12,40 @@
     URL.revokeObjectURL(link.href);
   }
 
+  function filteredJsonl() {
+    return `${visibleRecords.map(record => JSON.stringify(record.value)).join("\n")}\n`;
+  }
+
+  async function sha256Text(content) {
+    if (!globalThis.crypto?.subtle) {
+      throw new Error("SHA-256 provenance is unavailable in this browser context.");
+    }
+    const bytes = new TextEncoder().encode(content);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+  }
+
   function exportVisibleRecords() {
     if (!visibleRecords.length) {
       $("raw-record-context").textContent = "No filtered records are available to export.";
       return;
     }
-    const payload = `${visibleRecords.map(record => JSON.stringify(record.value)).join("\n")}\n`;
-    download(payload, "application/x-ndjson", "-filtered.jsonl");
+    download(filteredJsonl(), "application/x-ndjson", "-filtered.jsonl");
   }
 
-  function exportVisibleProvenance() {
+  async function exportVisibleProvenance() {
     if (!visibleRecords.length) {
       $("raw-record-context").textContent = "No filtered records are available for provenance export.";
       return;
     }
+    const payload = filteredJsonl();
+    const encoded = new TextEncoder().encode(payload);
     const manifest = {
       schemaVersion: 1,
       source: sourceName,
       recordCount: visibleRecords.length,
+      filteredContentBytes: encoded.byteLength,
+      filteredContentSha256: await sha256Text(payload),
       filters: {
         type: rawRecordFilter.value,
         timeStart: $("raw-record-time-start").value || null,
@@ -48,5 +64,11 @@
   }
 
   exportButton.addEventListener("click", exportVisibleRecords);
-  provenanceButton.addEventListener("click", exportVisibleProvenance);
+  provenanceButton.addEventListener("click", async () => {
+    try {
+      await exportVisibleProvenance();
+    } catch (error) {
+      $("raw-record-context").textContent = error instanceof Error ? error.message : "Unable to export provenance.";
+    }
+  });
 })();

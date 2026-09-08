@@ -2,6 +2,7 @@
 (() => {
   const startInput = $("raw-record-time-start");
   const endInput = $("raw-record-time-end");
+  const clearButton = $("clear-raw-record-time");
   const basePopulateRawRecords = populateRawRecords;
 
   function boundTimestamp(input) {
@@ -19,13 +20,36 @@
     return true;
   }
 
+  function markBoundValidity(input, valid) {
+    if (valid) input.removeAttribute("aria-invalid");
+    else input.setAttribute("aria-invalid", "true");
+  }
+
+  function rejectInvalidBound(input, timestamp, label) {
+    if (!input.value || timestamp !== null) {
+      markBoundValidity(input, true);
+      return false;
+    }
+    markBoundValidity(input, false);
+    visibleRecords = [];
+    rawRecordSelector.replaceChildren();
+    rawRecordSelector.value = "";
+    renderRawRecord(-1);
+    $("raw-record-context").textContent = `Invalid ${label} time bound. Enter a valid date and time.`;
+    return true;
+  }
+
   function applyTimeRangeFilter() {
     const start = boundTimestamp(startInput);
     const end = boundTimestamp(endInput);
     const active = Boolean(startInput.value || endInput.value);
     const kind = rawRecordFilter.value;
 
+    if (rejectInvalidBound(startInput, start, "start") || rejectInvalidBound(endInput, end, "end")) return;
+
     if (start !== null && end !== null && start > end) {
+      markBoundValidity(startInput, false);
+      markBoundValidity(endInput, false);
       visibleRecords = [];
       rawRecordSelector.replaceChildren();
       rawRecordSelector.value = "";
@@ -34,6 +58,8 @@
       return;
     }
 
+    markBoundValidity(startInput, true);
+    markBoundValidity(endInput, true);
     visibleRecords = records.filter(record =>
       (kind === "all" || record.kind === kind) && recordWithinTimeRange(record, start, end, active)
     );
@@ -57,6 +83,16 @@
     }
   }
 
+  function clearTimeRangeFilter() {
+    startInput.value = "";
+    endInput.value = "";
+    markBoundValidity(startInput, true);
+    markBoundValidity(endInput, true);
+    applyTimeRangeFilter();
+    $("raw-record-context").textContent = "Time bounds cleared. Showing records from the active type filter.";
+    startInput.focus();
+  }
+
   populateRawRecords = function populateRawRecordsWithTimeRange() {
     basePopulateRawRecords();
     if (startInput.value || endInput.value) applyTimeRangeFilter();
@@ -64,4 +100,5 @@
 
   startInput.addEventListener("input", applyTimeRangeFilter);
   endInput.addEventListener("input", applyTimeRangeFilter);
+  clearButton.addEventListener("click", clearTimeRangeFilter);
 })();

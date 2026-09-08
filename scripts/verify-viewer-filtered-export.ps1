@@ -13,6 +13,9 @@ if ($script -notmatch 'application/x-ndjson') { throw 'Export must use JSONL/NDJ
 if ($script -notmatch '-filtered\.jsonl') { throw 'Export filename must identify the filtered subset.' }
 if ($script -notmatch '-filtered-provenance\.json') { throw 'Provenance export filename must be explicit.' }
 if ($script -notmatch 'schemaVersion:\s*1') { throw 'Provenance manifest must be schema-versioned.' }
+if ($script -notmatch 'filteredContentBytes:') { throw 'Provenance manifest must record exact filtered JSONL byte count.' }
+if ($script -notmatch 'filteredContentSha256:') { throw 'Provenance manifest must checksum the exact filtered JSONL content.' }
+if ($script -notmatch 'crypto\.subtle\.digest\("SHA-256"') { throw 'Filtered export checksum must use browser SHA-256.' }
 if ($script -notmatch 'timeStart:') { throw 'Provenance manifest must capture lower time bound.' }
 if ($script -notmatch 'timeEnd:') { throw 'Provenance manifest must capture upper time bound.' }
 if ($script -notmatch 'correlationKind: record\.correlationKind') { throw 'Provenance manifest must retain correlation evidence.' }
@@ -23,4 +26,6 @@ if ($script -match '\beval\s*\(' -or $script -match '\.innerHTML\s*=') { throw '
 
 node --check report-viewer/filtered-export.js
 if ($LASTEXITCODE -ne 0) { throw 'filtered-export.js failed syntax validation.' }
-Write-Host 'Filtered report and provenance export contracts verified.'
+node scripts/verify-viewer-filtered-export-behavior.mjs
+if ($LASTEXITCODE -ne 0) { throw 'Filtered export behavior harness failed.' }
+Write-Host 'Filtered report and checksummed provenance export contracts verified.'
