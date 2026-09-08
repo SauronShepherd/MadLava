@@ -53,7 +53,12 @@ public final class MethodFilter {
 
     private static List<MethodPattern> parsePatterns(String raw) {
         List<MethodPattern> patterns = new ArrayList<>();
-        if (raw == null || raw.isBlank()) {
+        // Runtime configuration maps omit a key when a method filter is removed. The hot-reload
+        // path historically used String.valueOf(null), yielding the literal "null" here and
+        // accidentally preserving a synthetic include instead of clearing instrumentation.
+        // Treat that legacy sentinel as the absent value so narrowing/removing a rule is
+        // fail-closed even while older callers are being migrated to null-safe conversion.
+        if (raw == null || raw.isBlank() || "null".equals(raw)) {
             return patterns;
         }
         for (String part : MethodRuleList.split(raw)) {
