@@ -17,7 +17,7 @@ class MethodFilterTest {
     }
 
     @Test void configuredIncludesStillMatchNormally() {
-        MethodFilter filter = MethodFilter.parse("com.example.Work#run", "");
+        MethodFilter filter = MethodFilter.parse("com.example.Work.run#()V", "");
 
         assertTrue(filter.mayMatchClass("com.example.Work"));
         assertTrue(filter.matches("com.example.Work", "run", "()V"));
