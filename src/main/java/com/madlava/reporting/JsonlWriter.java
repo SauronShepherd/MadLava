@@ -13,6 +13,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -91,12 +92,14 @@ public final class JsonlWriter implements AutoCloseable {
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             long currentSize = Files.exists(active) ? Files.size(active) : 0L;
             while (running.get() || (drainOnStop && queue.size() > 0)) {
-                String line = queue.poll();
-                if (line == null) {
-                    try { Thread.sleep(10); }
-                    catch (InterruptedException ignored) { /* lifecycle wake-up */ }
+                String line;
+                try {
+                    line = queue.poll(1, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                    // close()/rotate() interrupt the wait so lifecycle transitions remain prompt.
                     continue;
                 }
+                if (line == null) continue;
                 byte[] encoded = (line + System.lineSeparator()).getBytes(StandardCharsets.UTF_8);
                 if (currentSize > 0L && currentSize + encoded.length > maxSegmentBytes) {
                     out.flush();
