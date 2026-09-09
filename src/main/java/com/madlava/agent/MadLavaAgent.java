@@ -22,9 +22,11 @@ import com.madlava.api.MadLavaRuntimeRegistry;
 import java.lang.instrument.Instrumentation;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** MadLava Iteration-12 Java agent entry point. */
 public final class MadLavaAgent {
@@ -314,6 +316,7 @@ public final class MadLavaAgent {
             return 0;
         }
         int failures = 0;
+        List<Class<?>> candidates = new ArrayList<>();
         for (Class<?> candidate : instrumentation.getAllLoadedClasses()) {
             try {
                 if (candidate == null || !instrumentation.isModifiableClass(candidate)) {
@@ -324,15 +327,38 @@ public final class MadLavaAgent {
                 boolean matchedPreviously = previousMethodFilter != null
                         && previousMethodFilter.mayMatchClass(owner);
                 if (matchedPreviously || transformer.mayTransformClass(internalName)) {
-                    instrumentation.retransformClasses(candidate);
+                    candidates.add(candidate);
                 }
             } catch (Throwable ignored) {
-                // A single class must never disable the agent or the application, but reload
-                // callers need to know that the JVM is now only partially retransformed.
                 failures++;
             }
         }
-        return failures;
+        return failures + retransformCandidates(instrumentation, candidates);
+    }
+
+    /**
+     * Use one JVM safepoint for the normal reload path. Only if the batch fails do we retry
+     * individually so callers retain the old per-class failure attribution without paying one
+     * safepoint per matching class on successful reloads.
+     */
+    static int retransformCandidates(Instrumentation instrumentation, List<Class<?>> candidates) {
+        if (candidates.isEmpty()) {
+            return 0;
+        }
+        try {
+            instrumentation.retransformClasses(candidates.toArray(new Class<?>[0]));
+            return 0;
+        } catch (Throwable batchFailure) {
+            int failures = 0;
+            for (Class<?> candidate : candidates) {
+                try {
+                    instrumentation.retransformClasses(candidate);
+                } catch (Throwable ignored) {
+                    failures++;
+                }
+            }
+            return failures;
+        }
     }
 
     static boolean liveMethodRuleReloadSupported(boolean methodCallbacksEnabled, boolean retransformationSupported) {
