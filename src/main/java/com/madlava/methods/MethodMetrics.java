@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
@@ -19,7 +20,7 @@ import com.madlava.tracing.ArgumentCanonicalizer;
 /** Lock-free inclusive method-boundary aggregation. */
 public final class MethodMetrics {
     private final MethodRegistry registry;
-    private final ConcurrentHashMap<Integer, Counters> counters = new ConcurrentHashMap<>();
+    private final AtomicReferenceArray<Counters> counters;
     private final ConcurrentHashMap<Integer, ConcurrentHashMap<ArgumentKey, LongAdder>> argumentGroups = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, LongAdder> droppedArgumentGroups = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, LongAdder> overflowArgumentInvocations = new ConcurrentHashMap<>();
@@ -37,20 +38,33 @@ public final class MethodMetrics {
         this.registry = registry;
         if(maxArgumentGroupsPerMethod<1)throw new IllegalArgumentException("maxArgumentGroupsPerMethod must be positive");
         this.maxArgumentGroupsPerMethod=maxArgumentGroupsPerMethod;
+        this.counters = new AtomicReferenceArray<>(registry.maximumEntries() + 1);
+    }
+
+    private Counters countersFor(int methodId) {
+        Counters existing = counters.get(methodId);
+        if (existing != null) {
+            return existing;
+        }
+        Counters created = new Counters();
+        if (counters.compareAndSet(methodId, null, created)) {
+            return created;
+        }
+        return counters.get(methodId);
     }
 
     public void entered(int methodId) {
         if (methodId == MethodRegistry.REJECTED_ID) {
             return;
         }
-        counters.computeIfAbsent(methodId, ignored -> new Counters()).invocations.increment();
+        countersFor(methodId).invocations.increment();
     }
 
     public void normalCompletion(int methodId, long durationNanos) {
         if (methodId == MethodRegistry.REJECTED_ID) {
             return;
         }
-        Counters values = counters.computeIfAbsent(methodId, ignored -> new Counters());
+        Counters values = countersFor(methodId);
         // Publish duration aggregates before the completion count. report() uses a non-zero
         // completion count as the signal that min/max duration state is initialized.
         values.recordDuration(durationNanos);
@@ -62,7 +76,7 @@ public final class MethodMetrics {
         if (methodId == MethodRegistry.REJECTED_ID) {
             return;
         }
-        Counters values = counters.computeIfAbsent(methodId, ignored -> new Counters());
+        Counters values = countersFor(methodId);
         // Keep the same publication order as normalCompletion so live snapshots can never
         // observe a completion backed by LongAccumulator identity values.
         values.recordDuration(durationNanos);
@@ -120,26 +134,29 @@ public final class MethodMetrics {
 
     public Map<String, Object> report() {
         List<Map<String, Object>> methods = new ArrayList<>();
-        for (Map.Entry<Integer, Counters> entry : counters.entrySet()) {
-            MethodKey key = registry.key(entry.getKey());
-            if (key == null) {
+        for (Map.Entry<Integer, MethodKey> entry : registry.entries()) {
+            int methodId = entry.getKey();
+            Counters values = counters.get(methodId);
+            if (values == null) {
                 continue;
             }
-            Counters values = entry.getValue();
+            MethodKey key = entry.getValue();
             Map<String, Object> item = new LinkedHashMap<>(key.report());
 
             // Read child/detail counters first and the parent invocation total last. An argument
             // group or completion is recorded only after entered(), so this ordering prevents a
             // live snapshot from reporting more detailed events than parent invocations merely
             // because activity advanced between two LongAdder.sum() calls.
-            ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.get(entry.getKey());
+            ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.get(methodId);
             if (groups != null && !groups.isEmpty()) {
                 List<Map<String,Object>> argumentReports = new ArrayList<>();
                 groups.forEach((arguments, count) -> { Map<String,Object> group = new LinkedHashMap<>(); group.put("arguments", arguments.arguments()); group.put("invocations", count.sum()); argumentReports.add(group); });
                 argumentReports.sort(Comparator.comparingLong((Map<String,Object> group) -> ((Number) group.get("invocations")).longValue()).reversed().thenComparing(Object::toString));
                 item.put("argumentGroups", argumentReports);
-                item.put("droppedArgumentGroups", droppedArgumentGroups.getOrDefault(entry.getKey(), new LongAdder()).sum());
-                item.put("overflowArgumentInvocations", overflowArgumentInvocations.getOrDefault(entry.getKey(), new LongAdder()).sum());
+                LongAdder dropped = droppedArgumentGroups.get(methodId);
+                LongAdder overflow = overflowArgumentInvocations.get(methodId);
+                item.put("droppedArgumentGroups", dropped == null ? 0L : dropped.sum());
+                item.put("overflowArgumentInvocations", overflow == null ? 0L : overflow.sum());
             }
             long normal = values.normalCompletions.sum();
             long exceptional = values.exceptionalCompletions.sum();
@@ -177,7 +194,9 @@ public final class MethodMetrics {
     }
 
     public void reset() {
-        counters.clear();
+        for (int methodId = 1; methodId < counters.length(); methodId++) {
+            counters.set(methodId, null);
+        }
         argumentGroups.clear();
         droppedArgumentGroups.clear();
         overflowArgumentInvocations.clear();
