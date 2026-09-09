@@ -1,45 +1,76 @@
 package com.madlava.reporting;
 
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** Bounded latest-value queue. When full, the oldest queued record is evicted. */
 public final class BoundedSnapshotQueue {
-    private final ArrayBlockingQueue<String> queue;
+    private final int capacity;
+    private final Deque<String> queue;
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition notEmpty = lock.newCondition();
     private final LongAdder dropped = new LongAdder();
 
     public BoundedSnapshotQueue(int capacity) {
         if (capacity < 1) {
             throw new IllegalArgumentException("Capacity must be positive");
         }
-        queue = new ArrayBlockingQueue<>(capacity);
+        this.capacity = capacity;
+        this.queue = new ArrayDeque<>(capacity);
     }
 
-    /**
-     * Producer-side eviction is synchronized so concurrent producers cannot both observe a full
-     * queue, over-evict records, or miscount a consumer removal as a producer drop.
-     */
-    public synchronized void submit(String value) {
-        if (queue.offer(value)) {
-            return;
-        }
-        String evicted = queue.poll();
-        if (evicted != null) {
-            dropped.increment();
-        }
-        // No other producer can refill while this method is synchronized; synchronizing poll()
-        // also keeps the eviction/accounting transition atomic with respect to consumers.
-        if (!queue.offer(value)) {
-            throw new IllegalStateException("Unable to enqueue after bounded eviction");
+    /** Evict the oldest queued value atomically when the bounded queue is full. */
+    public void submit(String value) {
+        lock.lock();
+        try {
+            if (queue.size() == capacity) {
+                queue.removeFirst();
+                dropped.increment();
+            }
+            queue.addLast(value);
+            notEmpty.signal();
+        } finally {
+            lock.unlock();
         }
     }
 
-    public synchronized String poll() {
-        return queue.poll();
+    public String poll() {
+        lock.lock();
+        try {
+            return queue.pollFirst();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Wait for a value without periodic wakeups while preserving exact eviction accounting. */
+    public String poll(long timeout, TimeUnit unit) throws InterruptedException {
+        long remaining = unit.toNanos(timeout);
+        lock.lockInterruptibly();
+        try {
+            while (queue.isEmpty()) {
+                if (remaining <= 0L) {
+                    return null;
+                }
+                remaining = notEmpty.awaitNanos(remaining);
+            }
+            return queue.removeFirst();
+        } finally {
+            lock.unlock();
+        }
     }
 
     public int size() {
-        return queue.size();
+        lock.lock();
+        try {
+            return queue.size();
+        } finally {
+            lock.unlock();
+        }
     }
 
     public long droppedCount() {
