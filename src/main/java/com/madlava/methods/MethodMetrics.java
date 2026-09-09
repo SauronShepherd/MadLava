@@ -38,7 +38,7 @@ public final class MethodMetrics {
         this.registry = registry;
         if(maxArgumentGroupsPerMethod<1)throw new IllegalArgumentException("maxArgumentGroupsPerMethod must be positive");
         this.maxArgumentGroupsPerMethod=maxArgumentGroupsPerMethod;
-        this.counters = new AtomicReferenceArray<>(registry.maximumEntries() + 1);
+        this.counters = new AtomicReferenceArray<>(registry == null ? 1 : registry.maximumEntries() + 1);
     }
 
     private Counters countersFor(int methodId) {
@@ -65,8 +65,6 @@ public final class MethodMetrics {
             return;
         }
         Counters values = countersFor(methodId);
-        // Publish duration aggregates before the completion count. report() uses a non-zero
-        // completion count as the signal that min/max duration state is initialized.
         values.recordDuration(durationNanos);
         values.normalCompletions.increment();
         emitTrace(methodId, durationNanos);
@@ -77,8 +75,6 @@ public final class MethodMetrics {
             return;
         }
         Counters values = countersFor(methodId);
-        // Keep the same publication order as normalCompletion so live snapshots can never
-        // observe a completion backed by LongAccumulator identity values.
         values.recordDuration(durationNanos);
         values.exceptionalCompletions.increment();
         emitTrace(methodId, durationNanos);
@@ -142,11 +138,6 @@ public final class MethodMetrics {
             }
             MethodKey key = entry.getValue();
             Map<String, Object> item = new LinkedHashMap<>(key.report());
-
-            // Read child/detail counters first and the parent invocation total last. An argument
-            // group or completion is recorded only after entered(), so this ordering prevents a
-            // live snapshot from reporting more detailed events than parent invocations merely
-            // because activity advanced between two LongAdder.sum() calls.
             ConcurrentHashMap<ArgumentKey, LongAdder> groups = argumentGroups.get(methodId);
             if (groups != null && !groups.isEmpty()) {
                 List<Map<String,Object>> argumentReports = new ArrayList<>();
