@@ -28,6 +28,7 @@ public final class MethodMetrics {
     private static final int DEFAULT_MAX_ARGUMENT_GROUPS_PER_METHOD = 256;
     private final int maxArgumentGroupsPerMethod;
     private final LongAdder suppressedReentrantCallbacks = new LongAdder();
+    private final LongAdder failedTraceDeliveries = new LongAdder();
     private volatile TraceConfiguration traceConfiguration;
     private volatile ArgumentCapture argumentCapture = new ArgumentCapture(new SafeArgumentRenderer(), new ArgumentRedactor(null, null), 16);
     private volatile ArgumentCanonicalizer argumentCanonicalizer = new ArgumentCanonicalizer();
@@ -110,7 +111,7 @@ public final class MethodMetrics {
         MethodKey key=registry == null ? null : registry.key(methodId);
         if(key==null||!tracing.sampler.sample())return;
         try { tracing.sink.accept(TraceEvent.methodCall(tracing.configurationVersion,key.owner(),key.name(),key.descriptor(),durationNanos,null)); }
-        catch(Throwable ignored) { }
+        catch(Throwable ignored) { failedTraceDeliveries.increment(); }
     }
 
     public void suppressedReentrantCallback() { suppressedReentrantCallbacks.increment(); }
@@ -158,6 +159,7 @@ public final class MethodMetrics {
         report.put("maximumMethods", registry == null ? 0 : registry.maximumEntries());
         report.put("droppedMethodRegistrations", registry == null ? 0L : registry.droppedRegistrations());
         report.put("suppressedReentrantCallbacks", suppressedReentrantCallbacks.sum());
+        report.put("failedTraceDeliveries", failedTraceDeliveries.sum());
         report.put("methods", methods);
         report.put("limitations", List.of("Durations are inclusive; nested method durations overlap.", "Counts describe selected method boundaries, not physical bytes or CPU samples.", "Raw arguments, return values, payloads and exception messages are never retained; COUNT_BY_ARGS stores bounded type shapes and per-run salted scalar fingerprints."));
         return report;
@@ -170,6 +172,7 @@ public final class MethodMetrics {
         droppedArgumentGroups.clear();
         overflowArgumentInvocations.clear();
         suppressedReentrantCallbacks.reset();
+        failedTraceDeliveries.reset();
         if (registry != null) registry.resetDroppedRegistrations();
     }
 
