@@ -21,6 +21,20 @@ class MethodMetricsTracingTest {
     }
 
     @Test
+    void failedTraceSinkDeliveryIsObservableAndResettable() {
+        MethodRegistry registry = new MethodRegistry(8);
+        int methodId = registry.register(new MethodKey("test-loader", "example.Target", "call", "()V"));
+        MethodMetrics metrics = new MethodMetrics(registry);
+        metrics.enableTracing(1L, event -> { throw new IllegalStateException("sink unavailable"); });
+
+        assertDoesNotThrow(() -> metrics.normalCompletion(methodId, 1L));
+        assertEquals(1L, ((Number) metrics.report().get("failedTraceDeliveries")).longValue());
+
+        metrics.reset();
+        assertEquals(0L, ((Number) metrics.report().get("failedTraceDeliveries")).longValue());
+    }
+
+    @Test
     void hotReloadPublishesTraceVersionSamplerAndSinkAsOneGeneration() throws Exception {
         MethodRegistry registry = new MethodRegistry(8);
         int methodId = registry.register(new MethodKey("test-loader", "example.Target", "call", "()V"));
