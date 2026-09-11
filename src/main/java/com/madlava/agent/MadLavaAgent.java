@@ -138,8 +138,8 @@ public final class MadLavaAgent {
                         || !java.util.Objects.equals(
                         previous.values().get("filters.methods.excludes"), proposed.values().get("filters.methods.excludes")))) {
                     try {
-                        String includes = String.valueOf(proposed.values().get("filters.methods.includes"));
-                        String excludes = String.valueOf(proposed.values().get("filters.methods.excludes"));
+                        String includes = java.util.Objects.toString(proposed.values().get("filters.methods.includes"), "");
+                        String excludes = java.util.Objects.toString(proposed.values().get("filters.methods.excludes"), "");
                         MethodFilter.parse(includes, excludes);
                         MethodObservationPlan.compile(MethodRuleList.split(includes));
                     } catch (RuntimeException invalidRule) {
@@ -211,12 +211,16 @@ public final class MadLavaAgent {
                     Object previousExcludes = previous.values().get("filters.methods.excludes");
                     if (!java.util.Objects.equals(includes, previousIncludes)
                             || !java.util.Objects.equals(excludes, previousExcludes)) {
+                        String previousIncludesText = java.util.Objects.toString(previousIncludes, "");
+                        String previousExcludesText = java.util.Objects.toString(previousExcludes, "");
+                        String includesText = java.util.Objects.toString(includes, "");
+                        String excludesText = java.util.Objects.toString(excludes, "");
                         MethodFilter previousFilter = MethodFilter.parse(
-                                String.valueOf(previousIncludes), String.valueOf(previousExcludes));
-                        MethodFilter nextFilter = MethodFilter.parse(String.valueOf(includes), String.valueOf(excludes));
+                                previousIncludesText, previousExcludesText);
+                        MethodFilter nextFilter = MethodFilter.parse(includesText, excludesText);
                         liveTransformer.updateMethodSelection(
                                 nextFilter,
-                                MethodObservationPlan.compile(MethodRuleList.split(String.valueOf(includes))));
+                                MethodObservationPlan.compile(MethodRuleList.split(includesText)));
                         int failures = retransformAlreadyLoaded(instrumentation, liveTransformer, previousFilter);
                         if (failures > 0) {
                             throw new IllegalStateException(

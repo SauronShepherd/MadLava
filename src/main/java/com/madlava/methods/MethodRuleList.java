@@ -9,7 +9,7 @@ public final class MethodRuleList {
     private MethodRuleList() { }
 
     public static List<String> split(String raw) {
-        if (raw == null || raw.isBlank() || "null".equals(raw.trim())) return List.of();
+        if (raw == null || raw.isBlank()) return List.of();
         List<String> result = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean descriptor = false;
