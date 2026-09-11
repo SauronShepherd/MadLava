@@ -31,6 +31,8 @@ public final class JsonlWriter implements AutoCloseable {
     private volatile boolean drainOnStop = true;
     private volatile Path path;
     private Thread thread;
+    private long generation;
+    private long finalizedGeneration = -1L;
 
     public JsonlWriter(BoundedSnapshotQueue queue, Path path) {
         this(queue, path, DEFAULT_MAX_SEGMENT_BYTES,
@@ -73,6 +75,7 @@ public final class JsonlWriter implements AutoCloseable {
 
     private void startPrepared() {
         drainOnStop = true;
+        generation++;
         running.set(true);
         thread = new Thread(this::run, "madlava-writer");
         thread.setDaemon(true);
@@ -167,7 +170,8 @@ public final class JsonlWriter implements AutoCloseable {
     public synchronized boolean isWorkerAlive() { return thread != null && thread.isAlive(); }
     long manifestFinalizationCount() { return manifestFinalizations.get(); }
 
-    private void finalizeManifest() {
+    synchronized void finalizeManifest() {
+        if (finalizedGeneration == generation) return;
         try {
             List<Path> files = reportFiles(path);
             if (files.isEmpty()) return;
@@ -194,6 +198,7 @@ public final class JsonlWriter implements AutoCloseable {
             String manifest = finalManifestText(path.toString(), files.size(), records, bytes, hex(digest.digest()), fileEntries);
             Files.writeString(path.resolveSibling("madlava-report-manifest.json"), manifest,
                     StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            finalizedGeneration = generation;
             manifestFinalizations.incrementAndGet();
         } catch (Throwable ignored) { }
     }

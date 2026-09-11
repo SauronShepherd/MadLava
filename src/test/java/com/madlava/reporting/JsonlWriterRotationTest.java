@@ -35,6 +35,28 @@ class JsonlWriterRotationTest {
         assertEquals(1, writer.manifestFinalizationCount(), "repeated close stays idempotent");
     }
 
+    @Test void manifestFinalizationIsIdempotentPerWriterGeneration() throws Exception {
+        Path root = Files.createTempDirectory("madlava-manifest-idempotence");
+        Path active = root.resolve("madlava.jsonl");
+        BoundedSnapshotQueue queue = new BoundedSnapshotQueue(16);
+        JsonlWriter writer = new JsonlWriter(queue, active);
+        writer.start();
+        queue.submit("{\"record\":\"first-generation\"}");
+        Thread.sleep(60);
+        writer.close();
+        assertEquals(1, writer.manifestFinalizationCount());
+
+        writer.finalizeManifest();
+        writer.finalizeManifest();
+        assertEquals(1, writer.manifestFinalizationCount(), "the same generation is finalized at most once");
+
+        writer.start();
+        queue.submit("{\"record\":\"second-generation\"}");
+        Thread.sleep(60);
+        writer.close();
+        assertEquals(2, writer.manifestFinalizationCount(), "a restarted writer creates a new finalizable generation");
+    }
+
     @Test void finalManifestEscapesControlCharactersInReportPath() {
         String manifest=JsonlWriter.finalManifestText("line\nbreak/madlava.jsonl",1,1,12,"abc");
         assertTrue(manifest.contains("line\\nbreak"));
