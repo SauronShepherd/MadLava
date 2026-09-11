@@ -80,6 +80,7 @@ public final class MethodMetrics {
     public void disableTracing() { traceConfiguration=null; }
     public void configureArgumentCapture(ArgumentCapture capture) { if(capture!=null) argumentCapture=capture; }
     public void traceArguments(int methodId, long durationNanos, Object[] arguments) {
+        if (registry == null || methodId == MethodRegistry.REJECTED_ID || arguments == null) return;
         MethodKey key=registry.key(methodId);
         if(key==null)return;
         try {
