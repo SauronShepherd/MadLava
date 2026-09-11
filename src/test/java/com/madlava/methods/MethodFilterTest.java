@@ -3,6 +3,7 @@ package com.madlava.methods;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MethodFilterTest {
@@ -15,11 +16,8 @@ class MethodFilterTest {
         assertFalse(filter.matches("com.example.Work", "run", "()V"));
     }
 
-    @Test void literalNullRemainsAValidConfiguredPattern() {
-        MethodFilter filter = MethodFilter.parse("null", "");
-
-        assertTrue(filter.includeSources().contains("null"));
-        assertTrue(filter.mayMatchClass("null"));
+    @Test void literalNullIsParsedAsConfigurationNotAnAbsenceSentinel() {
+        assertThrows(IllegalArgumentException.class, () -> MethodFilter.parse("null", ""));
     }
 
     @Test void configuredIncludesStillMatchNormally() {
