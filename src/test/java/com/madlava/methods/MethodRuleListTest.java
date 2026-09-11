@@ -8,11 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class MethodRuleListTest {
     @Test
-    void missingHotReloadFilterSentinelProducesNoRules() {
-        String missing = String.valueOf((Object) null);
+    void absentRuleListProducesNoRules() {
+        assertEquals(List.of(), MethodRuleList.split(null));
+        assertEquals(List.of(), MethodRuleList.split("   "));
+    }
 
-        assertEquals(List.of(), MethodRuleList.split(missing));
-        assertEquals(List.of(), MethodRuleList.split("  null  "));
+    @Test
+    void literalNullIsDataNotAnAbsenceSentinel() {
+        assertEquals(List.of("null"), MethodRuleList.split("null"));
+        assertEquals(List.of("null"), MethodRuleList.split("  null  "));
     }
 
     @Test
